@@ -46,6 +46,39 @@
         let txid: String?
     }
 
+    /// Demo: a Paykit v0.2 one-time request a contact sent Bitkit (Bitkit is the payer), as the views show it.
+    struct PaykitV2IncomingRequest: Equatable, Sendable, Identifiable {
+        enum Status: String, Sendable {
+            /// Waiting for Bitkit to pay.
+            case open
+            /// Bitkit's payment attempt is open: sent, or its outcome is not known yet.
+            case paying
+            /// Paid on-chain and the proof sent; the payee's receipt has not arrived yet.
+            case paid
+            /// The payee confirmed the payment with a receipt.
+            case receipted
+            case rejected
+            case cancelled
+            case expired
+            /// Held for the user, or a state the demo does not show.
+            case other
+        }
+
+        /// The request hash, hex.
+        let id: String
+        /// The payment reference the payee chose; Bitkit shows it as the request's note.
+        let reference: String
+        /// The payee, z-base-32 without a prefix.
+        let payee: String
+        let sats: UInt64
+        /// When Bitkit first read the request (Paykit v0.2 requests carry no creation time).
+        let receivedAt: Date
+        let expiresAt: Date?
+        let status: Status
+        /// The transaction Bitkit paid it with.
+        let txid: String?
+    }
+
     /// Demo: the Paykit v0.2 state the views show, published on the main actor by `PaykitV2Service`.
     ///
     /// This file imports neither Paykit module, so views and managers that import Paykit v0.1 can use it without name
@@ -59,6 +92,26 @@
         @Published private(set) var connections: [String: PaykitV2ContactConnection] = [:]
         /// One-time requests Bitkit sent, newest first.
         @Published private(set) var outgoingRequests: [PaykitV2OutgoingRequest] = []
+        /// One-time requests contacts sent Bitkit, newest first.
+        @Published private(set) var incomingRequests: [PaykitV2IncomingRequest] = []
+
+        /// Saved contacts' display names by z-base-32 identity, for toasts outside the views.
+        private var contactNames: [String: String] = [:]
+
+        /// The saved contact's display name, if the identity is a saved contact.
+        func contactName(for publicKey: String) -> String? {
+            PubkyZ32.decodeIdentity(publicKey).flatMap { contactNames[PubkyZ32.encode($0)] }
+        }
+
+        /// Takes the saved contacts' names, as `(publicKey, displayName)` pairs.
+        func setContactNames(_ names: [(publicKey: String, name: String)]) {
+            var byIdentity: [String: String] = [:]
+            for (publicKey, name) in names {
+                guard let identity = PubkyZ32.decodeIdentity(publicKey) else { continue }
+                byIdentity[PubkyZ32.encode(identity)] = name
+            }
+            contactNames = byIdentity
+        }
 
         func connection(for publicKey: String) -> PaykitV2ContactConnection? {
             guard let identity = PubkyZ32.decodeIdentity(publicKey) else { return nil }
@@ -78,6 +131,23 @@
             if self.outgoingRequests != outgoingRequests {
                 self.outgoingRequests = outgoingRequests
             }
+        }
+
+        func apply(incomingRequests: [PaykitV2IncomingRequest]) {
+            if self.incomingRequests != incomingRequests {
+                self.incomingRequests = incomingRequests
+            }
+        }
+
+        /// Pays a contact's request on-chain from Bitkit's wallet and sends the proof. Returns the request as it stands
+        /// afterwards: `paid` (or `receipted`), or `paying` when the payment's outcome is not known yet.
+        static func payRequest(id: String) async throws -> PaykitV2IncomingRequest {
+            try await PaykitV2Service.shared.payRequest(hash: id)
+        }
+
+        /// Declines a contact's request; the contact sees it cancelled.
+        static func declineRequest(id: String) async throws {
+            try await PaykitV2Service.shared.declineRequest(hash: id)
         }
 
         /// Sends a one-time request for `sats` to a saved contact, to be paid to a fresh on-chain address.
