@@ -221,7 +221,7 @@ struct PaykitRecipientPicker<Header: View, Footer: View>: View {
 
     private var recipientInput: some View {
         VStack(alignment: .leading, spacing: 8) {
-            CaptionMText(t("wallet__payment_request_recipient").localizedUppercase, textColor: .white64, lineHeight: 18)
+            CaptionMText(t(PaykitV2Demo.requestPayerLabelKey).localizedUppercase, textColor: .white64, lineHeight: 18)
 
             HStack(spacing: 8) {
                 TextField(
@@ -613,7 +613,7 @@ struct PaymentRequestDetailsView: View {
 
     private var recipient: some View {
         VStack(alignment: .leading, spacing: 8) {
-            CaptionMText(t("wallet__payment_request_recipient").localizedUppercase, textColor: .white64, lineHeight: 18)
+            CaptionMText(t(PaykitV2Demo.requestPayerLabelKey).localizedUppercase, textColor: .white64, lineHeight: 18)
             HStack(spacing: 16) {
                 if let contact {
                     PubkyContactAvatar(contact: contact, size: 40)
@@ -730,7 +730,7 @@ struct PaymentRequestSentView: View {
             BodyMText(description, textColor: .white64)
                 .padding(.bottom, 32)
 
-            CaptionMText(t("wallet__payment_request_recipient").localizedUppercase, textColor: .white64, lineHeight: 18)
+            CaptionMText(t(PaykitV2Demo.requestPayerLabelKey).localizedUppercase, textColor: .white64, lineHeight: 18)
                 .padding(.bottom, 8)
 
             PaymentRequestCard(
