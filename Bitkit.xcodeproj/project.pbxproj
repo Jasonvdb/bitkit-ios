@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		182817C12F59A7F10055A441 /* Paykit in Frameworks */ = {isa = PBXBuildFile; productRef = 182817C02F59A7F10055A441 /* Paykit */; };
+		A7D2C0012F60000100ABCDEF /* PaykitV2 in Frameworks */ = {isa = PBXBuildFile; productRef = A7D2C0022F60000100ABCDEF /* PaykitV2 */; };
 		18D65E002EB964B500252335 /* VssRustClientFfi in Frameworks */ = {isa = PBXBuildFile; productRef = 18D65DFF2EB964B500252335 /* VssRustClientFfi */; };
 		18D65E022EB964BD00252335 /* VssRustClientFfi in Frameworks */ = {isa = PBXBuildFile; productRef = 18D65E012EB964BD00252335 /* VssRustClientFfi */; };
 		3D76260F4C9C4A53B1E4A001 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3D76260E4C9C4A53B1E4A001 /* CoreBluetooth.framework */; };
@@ -271,6 +272,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				182817C12F59A7F10055A441 /* Paykit in Frameworks */,
+				A7D2C0012F60000100ABCDEF /* PaykitV2 in Frameworks */,
 				72B5EE0000000000000000A3 /* BreezSdkSpark in Frameworks */,
 				3D76260F4C9C4A53B1E4A001 /* CoreBluetooth.framework in Frameworks */,
 				968FDF162DFAFE230053CD7F /* LDKNode in Frameworks */,
@@ -420,6 +422,7 @@
 				18D65DFF2EB964B500252335 /* VssRustClientFfi */,
 				182817C02F59A7F10055A441 /* Paykit */,
 				72B5EE0000000000000000A2 /* BreezSdkSpark */,
+				A7D2C0022F60000100ABCDEF /* PaykitV2 */,
 			);
 			productName = Bitkit;
 			productReference = 96FE1F612C2DE6AA006D0C8B /* Bitkit.app */;
@@ -531,6 +534,7 @@
 				18D65DFE2EB9649F00252335 /* XCRemoteSwiftPackageReference "vss-rust-client-ffi" */,
 				182817BF2F59A7F10055A441 /* XCRemoteSwiftPackageReference "paykit-rs" */,
 				72B5EE0000000000000000A1 /* XCRemoteSwiftPackageReference "breez-sdk-spark-swift" */,
+				A7D2C0032F60000100ABCDEF /* XCLocalSwiftPackageReference "LocalPackages/PaykitV2" */,
 			);
 			productRefGroup = 96FE1F622C2DE6AA006D0C8B /* Products */;
 			projectDirPath = "";
@@ -1257,6 +1261,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		A7D2C0032F60000100ABCDEF /* XCLocalSwiftPackageReference "LocalPackages/PaykitV2" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = LocalPackages/PaykitV2;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		182817BF2F59A7F10055A441 /* XCRemoteSwiftPackageReference "paykit-rs" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -1317,6 +1328,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		A7D2C0022F60000100ABCDEF /* PaykitV2 */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A7D2C0032F60000100ABCDEF /* XCLocalSwiftPackageReference "LocalPackages/PaykitV2" */;
+			productName = PaykitV2;
+		};
 		182817C02F59A7F10055A441 /* Paykit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 182817BF2F59A7F10055A441 /* XCRemoteSwiftPackageReference "paykit-rs" */;

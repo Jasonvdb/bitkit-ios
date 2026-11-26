@@ -79,6 +79,12 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         UNUserNotificationCenter.current().delegate = self
         SparkExitManager.registerBackgroundTask()
 
+        #if DEBUG
+            if Env.usesLocalRegtest {
+                PaykitVersionsProbe.runInBackground()
+            }
+        #endif
+
         // Check notification authorization status at launch and re-register with APN if granted
         UNUserNotificationCenter.current().getNotificationSettings { settings in
             if settings.authorizationStatus == .authorized {
