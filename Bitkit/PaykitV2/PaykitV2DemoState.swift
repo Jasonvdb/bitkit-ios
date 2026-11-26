@@ -10,6 +10,14 @@
         case connected
     }
 
+    /// Demo: which Private Payment Lists Bitkit and a connected contact shared with each other.
+    struct PaykitV2PrivateDetails: Equatable, Sendable {
+        /// Bitkit chose the contact as a recipient of its list (Paykit keeps sending it the current version).
+        let sharedByBitkit: Bool
+        /// A list from the contact arrived.
+        let sharedByContact: Bool
+    }
+
     /// Demo: a Paykit v0.2 one-time request Bitkit sent (Bitkit is the payee), as the views show it.
     struct PaykitV2OutgoingRequest: Equatable, Sendable, Identifiable {
         enum Status: String, Sendable {
@@ -90,6 +98,8 @@
         /// True once the v0.2 app is enrolled or loaded and its feed loop runs.
         @Published private(set) var isReady = false
         @Published private(set) var connections: [String: PaykitV2ContactConnection] = [:]
+        /// Private Payment Lists shared with and by each connected contact.
+        @Published private(set) var privateDetails: [String: PaykitV2PrivateDetails] = [:]
         /// One-time requests Bitkit sent, newest first.
         @Published private(set) var outgoingRequests: [PaykitV2OutgoingRequest] = []
         /// One-time requests contacts sent Bitkit, newest first.
@@ -127,6 +137,17 @@
             }
         }
 
+        func privateDetails(for publicKey: String) -> PaykitV2PrivateDetails? {
+            guard let identity = PubkyZ32.decodeIdentity(publicKey) else { return nil }
+            return privateDetails[PubkyZ32.encode(identity)]
+        }
+
+        func apply(privateDetails: [String: PaykitV2PrivateDetails]) {
+            if self.privateDetails != privateDetails {
+                self.privateDetails = privateDetails
+            }
+        }
+
         func apply(outgoingRequests: [PaykitV2OutgoingRequest]) {
             if self.outgoingRequests != outgoingRequests {
                 self.outgoingRequests = outgoingRequests
@@ -150,14 +171,22 @@
             try await PaykitV2Service.shared.declineRequest(hash: id)
         }
 
-        /// Sends a one-time request for `sats` to a saved contact, to be paid to a fresh on-chain address.
+        /// Sends a one-time request for `sats` to a saved contact, to be paid to a fresh on-chain address, or with
+        /// `toPrivateDetails` to the Private Payment List Bitkit shared with the contact.
         static func sendRequest(
             to publicKey: String,
             sats: UInt64,
             note: String,
-            expiresAt: Date?
+            expiresAt: Date?,
+            toPrivateDetails: Bool = false
         ) async throws -> PaykitV2OutgoingRequest {
-            try await PaykitV2Service.shared.sendRequest(to: publicKey, sats: sats, note: note, expiresAt: expiresAt)
+            try await PaykitV2Service.shared.sendRequest(
+                to: publicKey,
+                sats: sats,
+                note: note,
+                expiresAt: expiresAt,
+                toPrivateDetails: toPrivateDetails
+            )
         }
 
         /// Hands the saved contacts to the v0.2 host, which admits each one (`allowConnect`) once per process.

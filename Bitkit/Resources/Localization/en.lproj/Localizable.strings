@@ -1296,6 +1296,14 @@
 "contacts__add_name_placeholder" = "CONTACT NAME";
 "contacts__connection_connected" = "Connected";
 "contacts__connection_waiting" = "Waiting for {name} to add you";
+"contacts__private_details_title" = "PRIVATE PAYMENT DETAILS";
+"contacts__private_details_yours" = "YOUR DETAILS";
+"contacts__private_details_theirs" = "{name}'S DETAILS";
+"contacts__private_details_shared_with" = "Shared with {name}";
+"contacts__private_details_sharing_with" = "Sharing with {name}";
+"contacts__private_details_received" = "Shared with you";
+"contacts__private_details_not_received" = "Not shared yet";
+"contacts__private_details_note" = "Private payment details are only visible to the two of you. Payments between you use them instead of public addresses.";
 "contacts__add_disclaimer" = "Please note that you and {name} must add each other as contacts before you can pay each other privately. If you pay without saving, the payment is visible publicly.";
 "contacts__pay_private_link_pending" = "Bitkit is still setting up a private connection with this contact. Make sure they've added you as a contact too, or ask them to send you a payment request.";
 "contacts__import_nav_title" = "Import";
@@ -2129,6 +2137,9 @@
 "usdt__deposit_not_found" = "Deposit details changed. Refresh the deposit history and select it again.";
 
 "wallet__payment_request_accepted_methods" = "Accept payment in";
+"wallet__payment_request_pay_to" = "Pay to";
+"wallet__payment_request_pay_to_new_address" = "New address";
+"wallet__payment_request_pay_to_private" = "Private details";
 "wallet__payment_request_rate_unavailable" = "Payment rates are unavailable or expired. Try again when online.";
 
 "wallet__payment_request_payment_verified" = "Payment verified";

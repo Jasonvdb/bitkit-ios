@@ -119,6 +119,14 @@ struct ContactDetailView: View {
                         linksSection(profile)
                     }
 
+                    #if DEBUG
+                        if let details = paykitV2.privateDetails(for: publicKey) {
+                            PaykitV2PrivateDetailsSection(details: details, contactName: profile.name)
+                                .padding(.top, 16)
+                                .padding(.bottom, 8)
+                        }
+                    #endif
+
                     tagsSection(profile)
                         .padding(.top, 16)
                 }

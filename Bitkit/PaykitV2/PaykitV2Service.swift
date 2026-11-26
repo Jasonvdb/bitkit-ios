@@ -45,6 +45,26 @@
             var probeMsgId: String?
             /// When the contact was first known to have allowed Bitkit too.
             var connectedAtMs: UInt64?
+            /// When Bitkit chose the contact as a recipient of its Private Payment List (`publishListTo` succeeded).
+            /// Paykit sends later versions of the list to the contact by itself.
+            var listSharedAtMs: UInt64?
+            /// When a Private Payment List from the contact last arrived.
+            var listReceivedAtMs: UInt64?
+        }
+
+        /// Bitkit's reusable Private Payment List (`list.json`): one on-chain address of Bitkit's wallet, shared with
+        /// every connected contact. It is replaced by a fresh address once a payment to it is credited, so an address
+        /// is paid to once in the normal case (Paykit sends the new list to every contact it was shared with).
+        private struct ListState: Codable {
+            var address: String
+            var identifier: String
+            var setAtMs: UInt64
+            /// The list's earlier addresses: a payer may still pay one from an older copy of the list.
+            var earlierAddresses: [String]?
+
+            var allAddresses: Set<String> {
+                Set((earlierAddresses ?? []) + [address])
+            }
         }
 
         /// A one-time request Bitkit sent, as the host remembers it (`outgoing.json`).
@@ -55,6 +75,10 @@
             var payer: String
             var sats: UInt64
             var address: String
+            /// `private` for a request to be paid to Bitkit's Private Payment List (`RequestDestination.any`); nil for
+            /// a request that carries its own fresh address. For a private one, `address` is the list's address when
+            /// the request was sent, then the address the payment verified at.
+            var destination: String?
             var createdAtMs: UInt64
             var expiresAtMs: UInt64?
             /// The request message, while its delivery is not known to be accepted.
@@ -112,6 +136,15 @@
         /// Requests Bitkit is paying now, so a second tap does not start a second payment.
         private var payingNow: Set<String> = []
 
+        /// Bitkit's Private Payment List, kept in `list.json`.
+        private var list: ListState?
+        private var listURL: URL?
+        /// Whether `setListEndpoints` ran in this process (it is idempotent; each start hands the list to Paykit again).
+        private var listSetThisRun = false
+        /// The last error logged per contact for `publishListTo`, so a retry each round logs only changes.
+        private var lastListError: [String: String] = [:]
+        static let privatePaymentListKind = "paykit.private_payment_list"
+
         /// Starts once per process; later calls do nothing.
         func start(_ launch: Launch) {
             guard loopTask == nil else { return }
@@ -146,6 +179,9 @@
             outgoing = Self.readOutgoing(outgoingURL)
             incomingURL = launch.directory.appendingPathComponent("incoming.json")
             incoming = Self.readIncoming(incomingURL)
+            listURL = launch.directory.appendingPathComponent("list.json")
+            list = Self.readJSON(ListState.self, from: listURL, name: "list.json")
+            method?.setListAddresses(list?.allAddresses ?? [])
             publishState()
             publishOutgoing()
             await tendContacts()
@@ -337,6 +373,103 @@
                 }
                 links[key] = link
             }
+            await tendList(wallet)
+            saveLinks()
+            publishState()
+        }
+
+        // MARK: - Private Payment List
+
+        /// Keeps Bitkit's Private Payment List set, and shares it with every connected contact it was not shared with
+        /// yet. `publishListTo` refuses with `NotNow` until Paykit knows the contact's copy of their identity, so it is
+        /// tried again at every round until it succeeds.
+        private func tendList(_ wallet: PaykitV2.NativeWallet) async {
+            if list == nil || !listSetThisRun {
+                guard await setList(wallet, freshAddress: list == nil, reason: list == nil ? "first" : "start") else { return }
+            }
+            guard let list else { return }
+            var shared = false
+            for contact in savedContacts {
+                let key = PubkyZ32.encode(contact)
+                guard var link = links[key], link.connectedAtMs != nil, link.listSharedAtMs == nil else { continue }
+                do {
+                    try await wallet.publishListTo(recipient: contact)
+                    link.listSharedAtMs = Self.nowMs()
+                    links[key] = link
+                    lastListError.removeValue(forKey: key)
+                    shared = true
+                    Self.log("list published to \(key) endpoint=\(list.identifier) address=\(list.address)")
+                } catch {
+                    let text = Self.describe(error)
+                    if lastListError[key] != text {
+                        lastListError[key] = text
+                        Self.log("list to \(key) not published yet: \(text)", level: .warn)
+                    }
+                }
+            }
+            if shared {
+                do {
+                    try await wallet.flush()
+                } catch {
+                    Self.log("outbox flush after publishing the list failed: \(Self.describe(error))", level: .warn)
+                }
+            }
+        }
+
+        /// Hands the list to Paykit: the saved address, or a fresh one of Bitkit's wallet. A changed list goes to every
+        /// contact it was shared with (Paykit spec 8.4). Returns false when the list could not be set.
+        @discardableResult
+        private func setList(_ wallet: PaykitV2.NativeWallet, freshAddress: Bool, reason: String) async -> Bool {
+            var next = list
+            if freshAddress || next == nil {
+                let address: String
+                do {
+                    address = try await LightningService.shared.newAddress()
+                } catch {
+                    Self.log("list address not created: \(error)", level: .warn)
+                    return false
+                }
+                guard let identifier = PaykitV2OnchainMethod.identifier(forAddress: address) else {
+                    Self.log("list not set: address type of \(address) is not supported", level: .warn)
+                    return false
+                }
+                let earlier = list.map { ($0.earlierAddresses ?? []) + [$0.address] }
+                next = ListState(address: address, identifier: identifier, setAtMs: Self.nowMs(), earlierAddresses: earlier)
+            }
+            guard let next else { return false }
+            do {
+                try await wallet.setListEndpoints(endpoints: [
+                    PaykitV2.ListEndpoint(identifier: next.identifier, payload: PaykitV2OnchainMethod.payload(forAddress: next.address)),
+                ])
+            } catch {
+                Self.log("list not set: \(Self.describe(error))", level: .warn)
+                return false
+            }
+            let changed = list?.address != next.address
+            list = next
+            method?.setListAddresses(next.allAddresses)
+            listSetThisRun = true
+            Self.writeJSON(next, to: listURL, name: "list.json")
+            Self.log("list set reason=\(reason) endpoint=\(next.identifier) address=\(next.address) changed=\(changed)")
+            if changed, links.values.contains(where: { $0.listSharedAtMs != nil }) {
+                do {
+                    try await wallet.flush()
+                } catch {
+                    Self.log("outbox flush after the list change failed: \(Self.describe(error))", level: .warn)
+                }
+            }
+            publishState()
+            return true
+        }
+
+        /// A Private Payment List from a contact arrived: Bitkit can pay the contact's requests that leave the
+        /// destination open.
+        private func noteList(from sender: Data, msgId: String) {
+            let key = PubkyZ32.encode(sender)
+            var link = links[key] ?? ContactLink()
+            link.listReceivedAtMs = Self.nowMs()
+            links[key] = link
+            Self.log("list received from=\(key) msg=\(msgId)")
             saveLinks()
             publishState()
         }
@@ -399,16 +532,28 @@
             publishState()
         }
 
+        private var hasUnsharedList: Bool {
+            savedContacts.contains {
+                let link = links[PubkyZ32.encode($0)]
+                return link?.connectedAtMs != nil && link?.listSharedAtMs == nil
+            }
+        }
+
         private var hasOpenProbes: Bool {
             savedContacts.contains { links[PubkyZ32.encode($0)]?.connectedAtMs == nil }
         }
 
         private func publishState() {
             var connections: [String: PaykitV2ContactConnection] = [:]
+            var details: [String: PaykitV2PrivateDetails] = [:]
             for contact in savedContacts {
                 let key = PubkyZ32.encode(contact)
                 if links[key]?.connectedAtMs != nil {
                     connections[key] = .connected
+                    details[key] = PaykitV2PrivateDetails(
+                        sharedByBitkit: links[key]?.listSharedAtMs != nil && list != nil,
+                        sharedByContact: links[key]?.listReceivedAtMs != nil
+                    )
                 } else if wallet != nil {
                     connections[key] = .waiting
                 }
@@ -416,6 +561,7 @@
             let isReady = wallet != nil
             Task { @MainActor in
                 PaykitV2DemoState.shared.apply(isReady: isReady, connections: connections)
+                PaykitV2DemoState.shared.apply(privateDetails: details)
             }
         }
 
@@ -445,6 +591,7 @@
             case notAPubkyId
             case unsupportedAddress
             case notRecorded
+            case privateDetailsNotShared
 
             var errorDescription: String? {
                 switch self {
@@ -452,22 +599,47 @@
                 case .notAPubkyId: "This contact cannot receive payment requests."
                 case .unsupportedAddress: "Bitkit could not create a receiving address for this request."
                 case .notRecorded: "The payment request could not be sent. Try again."
+                case .privateDetailsNotShared: "Your private payment details are not shared with this contact yet."
                 }
             }
         }
 
-        /// Sends `publicKey` a one-time request for `sats`, to be paid on-chain to a new address of Bitkit's wallet.
+        /// Sends `publicKey` a one-time request for `sats`, to be paid on-chain to Bitkit's wallet: to a new address the
+        /// request carries, or, with `toPrivateDetails`, to the Private Payment List Bitkit shared with the contact
+        /// (`RequestDestination.any`: the payer takes the address from the list it holds).
         ///
         /// The address comes from Bitkit's LDK on-chain wallet, so the payment shows in Bitkit's balance and activity as
         /// a normal receive. The note becomes the payment reference the payer sees (Paykit v0.2 requests carry no memo).
-        func sendRequest(to publicKey: String, sats: UInt64, note: String, expiresAt: Date?) async throws -> PaykitV2OutgoingRequest {
+        func sendRequest(
+            to publicKey: String,
+            sats: UInt64,
+            note: String,
+            expiresAt: Date?,
+            toPrivateDetails: Bool
+        ) async throws -> PaykitV2OutgoingRequest {
             guard let wallet else { throw RequestError.notReady }
             guard let payer = PubkyZ32.decodeIdentity(publicKey) else { throw RequestError.notAPubkyId }
 
-            let address = try await LightningService.shared.newAddress()
-            guard let identifier = PaykitV2OnchainMethod.identifier(forAddress: address) else {
-                Self.log("request not sent: address type of \(address) is not supported", level: .warn)
-                throw RequestError.unsupportedAddress
+            let address: String
+            let identifier: String
+            let destination: PaykitV2.RequestDestination
+            if toPrivateDetails {
+                guard let list, links[PubkyZ32.encode(payer)]?.listSharedAtMs != nil else {
+                    throw RequestError.privateDetailsNotShared
+                }
+                address = list.address
+                identifier = list.identifier
+                destination = .any
+            } else {
+                address = try await LightningService.shared.newAddress()
+                guard let addressIdentifier = PaykitV2OnchainMethod.identifier(forAddress: address) else {
+                    Self.log("request not sent: address type of \(address) is not supported", level: .warn)
+                    throw RequestError.unsupportedAddress
+                }
+                identifier = addressIdentifier
+                destination = .endpoints(endpoints: [
+                    PaykitV2.ListEndpoint(identifier: identifier, payload: PaykitV2OnchainMethod.payload(forAddress: address)),
+                ])
             }
 
             let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -476,9 +648,7 @@
             let expiresAtMs = expiresAt.map { UInt64($0.timeIntervalSince1970 * 1000) }
             let draft = PaykitV2.RequestDraft(
                 amount: PaykitV2.Amount(asset: "btc", value: PaykitV2Sats.toBtc(sats)),
-                destination: .endpoints(endpoints: [
-                    PaykitV2.ListEndpoint(identifier: identifier, payload: PaykitV2OnchainMethod.payload(forAddress: address)),
-                ]),
+                destination: destination,
                 paymentReference: reference,
                 proposalExpiresAtMs: expiresAtMs,
                 paymentDeadlineMs: nil,
@@ -511,6 +681,7 @@
                 payer: PubkyZ32.encode(payer),
                 sats: sats,
                 address: address,
+                destination: toPrivateDetails ? "private" : nil,
                 createdAtMs: nowMs,
                 expiresAtMs: expiresAtMs,
                 msgId: sent.msgId,
@@ -521,7 +692,8 @@
             payeeStatus[key] = .requested
             saveOutgoing()
             Self.log(
-                "request sent to=\(PubkyZ32.encode(payer)) ref=\(reference) sats=\(sats) endpoint=\(identifier) "
+                "request sent to=\(PubkyZ32.encode(payer)) ref=\(reference) sats=\(sats) "
+                    + "destination=\(toPrivateDetails ? "privateList" : "endpoints") endpoint=\(identifier) "
                     + "address=\(address) requestHash=\(key) msg=\(sent.msgId) delivery=\(Self.describe(sent.delivery))"
             )
             publishOutgoing()
@@ -581,8 +753,15 @@
                 Self.log("verify ref=\(reference) try=\(tries): not paid enough on-chain yet", level: tries > 3 ? .warn : .info)
                 return false
             }
-            let txid = hash.flatMap { outgoing[$0]?.address }.flatMap { method?.verifiedTxid(forAddress: $0) }
-            Self.log("verified ref=\(reference) txid=\(txid ?? "unknown") paidAtMs=\(paidAtMs)")
+            let verification = method?.lastVerification()
+            let txid = verification?.txid
+            let paidAddress = verification?.address
+            let toList = paidAddress != nil && paidAddress == list?.address
+            let toEarlierList = paidAddress.map { list?.earlierAddresses?.contains($0) ?? false } ?? false
+            Self.log(
+                "verified ref=\(reference) txid=\(txid ?? "unknown") address=\(paidAddress ?? "unknown") "
+                    + "privateList=\(toList || toEarlierList) paidAtMs=\(paidAtMs)"
+            )
 
             do {
                 guard let receipt = try await wallet.confirmPayment(record: sale.record, details: nil) else {
@@ -590,9 +769,12 @@
                     return false
                 }
                 unconfirmedProofs.removeValue(forKey: record)
-                if let hash {
+                if let hash, outgoing[hash] != nil {
                     outgoing[hash]?.txid = txid
                     outgoing[hash]?.receiptMsgId = receipt
+                    if let paidAddress {
+                        outgoing[hash]?.address = paidAddress
+                    }
                     saveOutgoing()
                 }
                 do {
@@ -600,7 +782,15 @@
                 } catch {
                     Self.log("outbox flush after the receipt failed: \(Self.describe(error))", level: .warn)
                 }
-                Self.log("receipt sent ref=\(reference) txid=\(txid ?? "unknown") receipt=\(receipt)")
+                if hash == nil {
+                    Self.log("receipt sent unrequested from=\(PubkyZ32.encode(sale.payer)) txid=\(txid ?? "unknown") receipt=\(receipt)")
+                } else {
+                    Self.log("receipt sent ref=\(reference) txid=\(txid ?? "unknown") receipt=\(receipt)")
+                }
+                if toList {
+                    // The list's address is paid: the next payer gets a fresh one.
+                    await setList(wallet, freshAddress: true, reason: "paid")
+                }
                 return true
             } catch {
                 Self.log("confirm ref=\(reference) failed: \(Self.describe(error))", level: .warn)
@@ -719,7 +909,8 @@
                     // While a contact has not admitted Bitkit yet, wait less, so the outbox retries the probe soon after.
                     // While a proof waits for its transaction to show in Esplora, wait less too, so the request turns
                     // paid within seconds.
-                    let wake = try await wallet.feedWait(seconds: hasOpenProbes || hasUnconfirmedProofs ? 3 : 20)
+                    // While the list waits to be shared with a connected contact, wait less too.
+                    let wake = try await wallet.feedWait(seconds: hasOpenProbes || hasUnconfirmedProofs || hasUnsharedList ? 3 : 20)
                     Self.log("feed wait round=\(round) wake=\(wake)")
                 } catch {
                     Self.log("feed loop error round=\(round): \(Self.describe(error))", level: .warn)
@@ -741,8 +932,11 @@
                 let report = try await wallet.receive()
                 for event in report.events {
                     Self.log("event \(Self.describe(event.data))")
-                    if case let .messageReceived(_, _, _, _, sender) = event.data {
+                    if case let .messageReceived(_, _, kind, msgId, sender) = event.data {
                         noteMessage(from: sender)
+                        if kind == Self.privatePaymentListKind {
+                            noteList(from: sender, msgId: msgId)
+                        }
                     }
                 }
                 if !report.events.isEmpty || report.more || report.scopeKeysAwaited || report.recordsUnlisted != nil {
@@ -1001,6 +1195,25 @@
             switch launch.config.homeserverBackend {
             case .fake: .fake(baseUrl: launch.config.fakeHomeserverUrl)
             case .staging: .staging(baseUrl: launch.config.stagingHomeserverUrl, signIn: launch.stagingSignIn)
+            }
+        }
+
+        private static func readJSON<T: Decodable>(_ type: T.Type, from url: URL?, name: String) -> T? {
+            guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
+            do {
+                return try JSONDecoder().decode(type, from: Data(contentsOf: url))
+            } catch {
+                log("\(name) unreadable, starting empty: \(error)", level: .warn)
+                return nil
+            }
+        }
+
+        private static func writeJSON(_ value: some Encodable, to url: URL?, name: String) {
+            guard let url else { return }
+            do {
+                try JSONEncoder().encode(value).write(to: url, options: [.atomic, .completeFileProtection])
+            } catch {
+                log("\(name) not written: \(error)", level: .warn)
             }
         }
 
