@@ -512,6 +512,10 @@ struct PaykitPaymentRequestDraft: Hashable {
     var acceptedPaymentEndpointIdentifiers: [String]?
     let note: String
     let expiresAt: Date
+    #if DEBUG
+        /// Demo (Paykit v0.2): pay to the Private Payment List Bitkit shared with the contact, not a new address.
+        var paykitV2ToPrivateDetails = false
+    #endif
 
     init(amount: PaykitAmount, acceptedPaymentEndpointIdentifiers: [String]? = nil, note: String, expiresAt: Date) {
         self.amount = amount
@@ -3092,7 +3096,8 @@ final class PaykitPaymentRequestManager {
     // MARK: - Demo: Paykit v0.2 requests
 
     extension PaykitPaymentRequestManager {
-        /// Sends the request through Paykit v0.2, paid on-chain to a fresh address, and lists it as an outgoing request.
+        /// Sends the request through Paykit v0.2, paid on-chain to a fresh address or to Bitkit's Private Payment List,
+        /// and lists it as an outgoing request.
         fileprivate func proposePaykitV2(
             _ draft: PaykitPaymentRequestDraft,
             to target: PaykitPaymentRequestTarget
@@ -3110,7 +3115,8 @@ final class PaykitPaymentRequestManager {
                 to: target.publicKey,
                 sats: draft.amount.atomic,
                 note: draft.note,
-                expiresAt: draft.expiresAt
+                expiresAt: draft.expiresAt,
+                toPrivateDetails: draft.paykitV2ToPrivateDetails
             )
             let request = PaykitPaymentRequest(paykitV2Outgoing: row)
             historyRequests.removeAll { $0.id == request.id }

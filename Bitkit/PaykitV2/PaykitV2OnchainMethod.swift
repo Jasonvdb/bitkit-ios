@@ -44,10 +44,20 @@
 
         private let esploraUrl: URL
         private let session: URLSession
-        /// Paykit calls the method from its own threads; this lock guards the two maps below and the journal file.
+        /// Paykit calls the method from its own threads; this lock guards the state below and the journal file.
         private let lock = NSLock()
         /// The transaction that last verified for each address.
         private var verifiedTxids: [String: String] = [:]
+        /// The address and transaction of the proof that verified last.
+        private var lastVerified: (address: String, txid: String)?
+        /// Every address Bitkit put in its Private Payment List, for proofs that come without a payload.
+        private var listAddresses: Set<String> = []
+
+        /// Takes the addresses Bitkit's Private Payment List has held: the current one and earlier ones, which a payer
+        /// may still pay from an older copy of the list.
+        func setListAddresses(_ addresses: Set<String>) {
+            lock.withLock { listAddresses = addresses }
+        }
         /// The attempt journal, by attempt ID, kept in `journalURL`.
         private var journal: [String: JournalEntry]
         private let journalURL: URL
@@ -55,6 +65,13 @@
         /// The transaction whose proof verified for one of Bitkit's request addresses, for logs and the UI.
         func verifiedTxid(forAddress address: String) -> String? {
             lock.withLock { verifiedTxids[address] }
+        }
+
+        /// The address and transaction of the proof that verified last. The host reads it right after
+        /// `verifyPayment` returns a time, to learn which of Bitkit's addresses (a request's own, or the Private Payment
+        /// List's) was paid.
+        func lastVerification() -> (address: String, txid: String)? {
+            lock.withLock { lastVerified }
         }
 
         /// The transaction Bitkit sent for a payment attempt, once it was handed to the network.
@@ -288,21 +305,39 @@
                 PaykitV2Service.log("verify refused: amount \(proof.amount.value) \(proof.amount.asset) is not BTC", level: .warn)
                 return nil
             }
-            guard let address = proof.payload.flatMap(Self.address(fromPayload:)) else {
-                PaykitV2Service.log("verify refused: no address payload for txid=\(txid)", level: .warn)
-                return nil
+            // A request's own endpoint comes with its payload. A payment to Bitkit's Private Payment List (a request
+            // that left the destination open) comes without one, so the outputs to any address Bitkit ever put in its
+            // list count.
+            let targets: Set<String>
+            if let payload = proof.payload {
+                guard let address = Self.address(fromPayload: payload) else {
+                    PaykitV2Service.log("verify refused: no address in the payload for txid=\(txid)", level: .warn)
+                    return nil
+                }
+                targets = [address]
+            } else {
+                targets = lock.withLock { listAddresses }
+                guard !targets.isEmpty else {
+                    PaykitV2Service.log("verify refused: no payload and no list address for txid=\(txid)", level: .warn)
+                    return nil
+                }
             }
 
             let transaction = try await fetchTransaction(txid)
-            let received = transaction.vout
-                .filter { $0.scriptpubkeyAddress == address }
-                .reduce(UInt64(0)) { $0 + $1.value }
+            let paidOutputs = transaction.vout.filter { output in
+                output.scriptpubkeyAddress.map { targets.contains($0) } ?? false
+            }
+            let received = paidOutputs.reduce(UInt64(0)) { $0 + $1.value }
+            let address = paidOutputs.first?.scriptpubkeyAddress ?? targets.sorted().joined(separator: ",")
             let confirmed = transaction.status.confirmed
             PaykitV2Service.log(
                 "verify txid=\(txid) address=\(address) received=\(received) wanted=\(wanted) confirmed=\(confirmed)"
             )
             guard received >= wanted else { return nil }
-            lock.withLock { verifiedTxids[address] = txid }
+            lock.withLock {
+                verifiedTxids[address] = txid
+                lastVerified = (address, txid)
+            }
 
             let nowMs = UInt64(Date().timeIntervalSince1970 * 1000)
             if confirmed, let blockTime = transaction.status.blockTime {

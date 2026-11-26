@@ -485,6 +485,10 @@ struct PaymentRequestDetailsView: View {
     @State private var restrictedEndpoints: [String]?
     @State private var expiration = PaymentRequestExpiration.week
     @FocusState private var isNoteFocused: Bool
+    #if DEBUG
+        @ObservedObject private var paykitV2 = PaykitV2DemoState.shared
+        @State private var paykitV2PayTo = PaykitV2PayTo.newAddress
+    #endif
 
     private var contact: PubkyContact? {
         contactsManager.contacts.first { PubkyPublicKeyFormat.matches($0.publicKey, target.publicKey) }
@@ -501,7 +505,17 @@ struct PaymentRequestDetailsView: View {
                     noteInput
                     recipient
                     expirationPicker
-                    acceptedMethods
+                    #if DEBUG
+                        // Demo: both choices are paid to savings, so "Pay to" takes the place of the single
+                        // savings option.
+                        if canPayToPrivateDetails {
+                            payToPicker
+                        } else {
+                            acceptedMethods
+                        }
+                    #else
+                        acceptedMethods
+                    #endif
                 }
                 .padding(.bottom, 24)
             }
@@ -636,12 +650,40 @@ struct PaymentRequestDetailsView: View {
     }
 
     private var currentDraft: PaykitPaymentRequestDraft {
-        PaykitPaymentRequestDraft(
+        var draft = PaykitPaymentRequestDraft(
             amount: initialDraft.amount, acceptedPaymentEndpointIdentifiers: restrictedEndpoints,
             note: note.trimmingCharacters(in: .whitespacesAndNewlines),
             expiresAt: expiration.date(from: Date())
         )
+        #if DEBUG
+            draft.paykitV2ToPrivateDetails = canPayToPrivateDetails && paykitV2PayTo == .privateDetails
+        #endif
+        return draft
     }
+
+    #if DEBUG
+        /// Demo (Paykit v0.2): a request can be paid to Bitkit's private payment details once they are shared with the
+        /// contact.
+        private var canPayToPrivateDetails: Bool {
+            PaykitV2Demo.isEnabled && paykitV2.privateDetails(for: target.publicKey)?.sharedByBitkit == true
+        }
+
+        private var payToPicker: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                CaptionMText(t("wallet__payment_request_pay_to").localizedUppercase, textColor: .white64, lineHeight: 18)
+                SegmentedControl(
+                    selectedTab: $paykitV2PayTo,
+                    tabItems: [
+                        TabItem(.newAddress, accessibilityIdentifier: "PaymentRequestPayTo-address"),
+                        TabItem(.privateDetails, accessibilityIdentifier: "PaymentRequestPayTo-private"),
+                    ],
+                    inactiveColor: .white.opacity(0.5),
+                    labelKerning: 0,
+                    labelLineHeight: 18
+                )
+            }
+        }
+    #endif
 
     private func sendRequest() async {
         do {
