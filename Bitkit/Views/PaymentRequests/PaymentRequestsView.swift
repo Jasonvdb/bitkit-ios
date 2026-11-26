@@ -23,6 +23,13 @@ enum PaymentRequestDisplay {
         return history.filter { !activeIds.contains($0.id) && !hiddenIds.contains($0.id) }
     }
 
+    /// The small status under an outgoing request's amount: "pending" until it is paid, then "paid" once receipted.
+    static func outgoingAmountStatus(for request: PaykitPaymentRequest) -> String? {
+        guard request.direction == .outgoing else { return nil }
+        let key = request.isReceipted ? "wallet__payment_request_status_paid" : "wallet__payment_request_status_pending"
+        return t(key).localizedLowercase
+    }
+
     static func paymentDirection(for request: PaykitPaymentRequest) -> PaykitPaymentRequest.Direction? {
         request.lifecycleState == .proofSubmitted ? request.direction : nil
     }
@@ -55,7 +62,7 @@ enum PaymentRequestDisplay {
         case .canceled:
             return "wallet__payment_request_status_canceled"
         case .proofSubmitted:
-            return "wallet__payment_request_status_proof_submitted"
+            return request.isReceipted ? "wallet__payment_request_status_paid" : "wallet__payment_request_status_proof_submitted"
         case .recoveryRequired:
             return "wallet__payment_request_status_action_required"
         case .activeRecurring:
@@ -434,6 +441,7 @@ struct PaymentRequestsView: View {
                                 subtitleOverride: historyDate(for: request),
                                 isHighlighted: false,
                                 paymentDirection: PaymentRequestDisplay.paymentDirection(for: request),
+                                amountStatus: request.isReceipted ? PaymentRequestDisplay.outgoingAmountStatus(for: request) : nil,
                                 onOpen: { navigation.navigate(.paymentRequestDetail(request.id)) }
                             )
                         }
