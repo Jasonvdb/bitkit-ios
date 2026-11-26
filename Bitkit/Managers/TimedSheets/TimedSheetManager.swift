@@ -181,6 +181,13 @@ class TimedSheetManager: ObservableObject {
             return
         }
 
+        // Demo: the Paykit v0.2 demo is recorded from a fresh wallet, where the backup, high-balance and intro prompts
+        // would cover the screen in the middle of a take.
+        guard !PaykitV2Demo.isEnabled else {
+            Logger.debug("Paykit v0.2 demo, skipping timed sheets")
+            return
+        }
+
         // Don't show if any sheet is already open
         guard !sheetViewModel.isAnySheetOpen else {
             Logger.debug("Sheet already open, skipping timed sheet check")
