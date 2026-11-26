@@ -217,12 +217,24 @@ enum Env {
 
     // MARK: Server URLs
 
+    /// Demo: a Debug regtest app build (not E2E, not unit tests) runs on a Bitcoin regtest on this Mac instead of
+    /// Blocktank staging's chain. It is the default, not only a launch override, so a launch without the override
+    /// never syncs a wallet to the staging chain first. The simulator shares the Mac's loopback.
+    static var usesLocalRegtest: Bool {
+        isDebug && !isE2E && !isUnitTest && network == .regtest
+    }
+
+    /// Electrum server of the local regtest. `REGTEST_ELECTRUM_URL` (environment or launch argument) overrides it.
+    private static var localRegtestElectrumServerUrl: String {
+        configValue("REGTEST_ELECTRUM_URL") ?? "tcp://127.0.0.1:50001"
+    }
+
     static func electrumServerUrl(for network: LDKNode.Network) -> String {
         switch network {
         case .bitcoin: return "ssl://bitkit.to:9999"
         case .signet: return "ssl://mempool.space:60602"
         case .testnet: return "ssl://electrum.blockstream.info:60002"
-        case .regtest: return "ssl://electrs.bitkit.stag0.blocktank.to:9999"
+        case .regtest: return usesLocalRegtest ? localRegtestElectrumServerUrl : "ssl://electrs.bitkit.stag0.blocktank.to:9999"
         }
     }
 
@@ -372,12 +384,13 @@ enum Env {
             .appendingPathComponent("wallet\(walletIndex)/core")
     }
 
+    /// The local regtest has no gossip or scorer service, and staging's describe a different chain, so neither is used.
     static var ldkRgsServerUrl: String? {
         switch network {
         case .bitcoin: "https://rgs.blocktank.to/snapshot"
         case .signet: "https://rapidsync.lightningdevkit.org/signet/snapshot"
         case .testnet: "https://rapidsync.lightningdevkit.org/testnet/snapshot"
-        case .regtest: "https://bitkit.stag0.blocktank.to/rgs/snapshot"
+        case .regtest: usesLocalRegtest ? nil : "https://bitkit.stag0.blocktank.to/rgs/snapshot"
         }
     }
 
@@ -386,7 +399,7 @@ enum Env {
         case .bitcoin: "https://api.blocktank.to/scorer-prod"
         case .signet: nil
         case .testnet: nil
-        case .regtest: "https://api.stag0.blocktank.to/scorer"
+        case .regtest: usesLocalRegtest ? nil : "https://api.stag0.blocktank.to/scorer"
         }
     }
 
@@ -526,8 +539,13 @@ enum Env {
         case .bitcoin: "https://mempool.space"
         case .signet: "https://mutinynet.com"
         case .testnet: "https://mempool.space/testnet"
-        case .regtest: "https://mempool.bitkit.stag0.blocktank.to"
+        case .regtest: usesLocalRegtest ? localRegtestBlockExplorerUrl : "https://mempool.bitkit.stag0.blocktank.to"
         }
+    }
+
+    /// The local regtest stack's mempool explorer. `REGTEST_BLOCK_EXPLORER_URL` overrides it.
+    private static var localRegtestBlockExplorerUrl: String {
+        configValue("REGTEST_BLOCK_EXPLORER_URL") ?? "http://127.0.0.1:3000"
     }
 
     static var logDirectory: String {
