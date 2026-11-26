@@ -750,6 +750,7 @@ struct PaymentRequestSentView: View {
         .sheetBackground()
         .navigationBarHidden(true)
         .allowSwipeBack(false)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("PaymentRequestSent")
     }
 
