@@ -27,5 +27,9 @@ buildServer.json
 # XcodeBuildMCP
 .xcodebuildmcp/config.yaml
 
+# Paykit v0.2 local build, copied in by scripts/fetch-paykit-v2.sh
+LocalPackages/PaykitV2/PaykitV2FFI.xcframework/
+LocalPackages/PaykitV2/Sources/
+
 # Local build secrets (see Secrets.xcconfig.template)
 Secrets.xcconfig
