@@ -1605,6 +1605,12 @@ final class PaykitPaymentRequestManager {
 
     func refreshEligibleTargets(savedPublicKeys: [String]) async {
         updateSavedPublicKeys(savedPublicKeys)
+        if PaykitV2Demo.isEnabled {
+            // Demo: Paykit v0.2 can send a request to any saved contact; v0.1 discovery is not asked.
+            eligibilityGeneration += 1
+            eligibleTargets = savedPublicKeys.map { PaykitPaymentRequestTarget(publicKey: $0) }
+            return
+        }
         eligibilityGeneration += 1
         let generation = eligibilityGeneration
         let currentStateGeneration = stateGeneration
@@ -1656,6 +1662,14 @@ final class PaykitPaymentRequestManager {
     }
 
     func refreshEligibleTarget(publicKey: String) async -> PaykitPaymentRequestTarget? {
+        if PaykitV2Demo.isEnabled {
+            // Demo: every saved contact is a Paykit v0.2 request target.
+            guard let savedPublicKey = savedPublicKeys.first(where: { PubkyPublicKeyFormat.matches($0, publicKey) }) else { return nil }
+            if eligibleTarget(publicKey: publicKey) == nil {
+                eligibleTargets.append(PaykitPaymentRequestTarget(publicKey: savedPublicKey))
+            }
+            return eligibleTarget(publicKey: publicKey)
+        }
         let generation = eligibilityGeneration
         let currentStateGeneration = stateGeneration
         guard isAvailable(),

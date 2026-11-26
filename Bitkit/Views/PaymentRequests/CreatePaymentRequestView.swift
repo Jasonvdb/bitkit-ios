@@ -94,6 +94,7 @@ struct RequestOrPayView: View {
                     payTask = task
                     await task.value
                 }
+                .accessibilityIdentifier("RequestOrPayPay")
                 CustomButton(
                     title: t("wallet__payment_request_request"),
                     icon: Image("arrow-down").resizable().frame(width: 16, height: 16),
@@ -103,6 +104,7 @@ struct RequestOrPayView: View {
                         onRequest(target)
                     }
                 }
+                .accessibilityIdentifier("RequestOrPayRequest")
             }
         }
         .padding(.horizontal, 16)

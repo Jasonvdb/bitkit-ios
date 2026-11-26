@@ -38,10 +38,30 @@
             var appId: Data?
         }
 
+        /// What Bitkit knows about one saved contact's admission, kept in `contacts.json` so a relaunch shows the same
+        /// state without asking again.
+        private struct ContactLink: Codable {
+            /// The `resend_request` sent as an admission probe (see `tendContacts`), while its delivery is open.
+            var probeMsgId: String?
+            /// When the contact was first known to have allowed Bitkit too.
+            var connectedAtMs: UInt64?
+        }
+
         private(set) var wallet: PaykitV2.NativeWallet?
         private(set) var identity: Data?
         private var loopTask: Task<Void, Never>?
         private var seenRequests: Set<String> = []
+
+        /// Bitkit's saved contacts (v0.1 contact records), as 32-byte identities in the order they came.
+        private var savedContacts: [Data] = []
+        /// The contacts `allowConnect` succeeded for in this process. Each start admits every saved contact again; the
+        /// call is idempotent.
+        private var allowedThisRun: Set<Data> = []
+        private var links: [String: ContactLink] = [:]
+        private var linksURL: URL?
+        private var lastLoggedDelivery: [String: String] = [:]
+        private var isTending = false
+        private var tendAgain = false
 
         /// Starts once per process; later calls do nothing.
         func start(_ launch: Launch) {
@@ -71,7 +91,10 @@
 
             self.wallet = wallet
             identity = try? await wallet.identity()
-            await allowPeers(launch.config.allowPeers, wallet: wallet)
+            linksURL = launch.directory.appendingPathComponent("contacts.json")
+            links = Self.readLinks(linksURL)
+            publishState()
+            await tendContacts()
             await feedLoop(launch, wallet: wallet, store: store, homeserver: homeserver)
         }
 
@@ -168,22 +191,191 @@
             return wallet
         }
 
-        // MARK: - Admission
+        // MARK: - Contacts and admission
 
-        /// Demo: admits the Pubky IDs in `PAYKIT_V2_ALLOW_PEERS`, so a scripted peer's requests reach Bitkit before the
-        /// contacts step wires admission to Bitkit's contact list.
-        private func allowPeers(_ peers: [String], wallet: PaykitV2.NativeWallet) async {
-            for peer in peers {
-                guard let bytes = PubkyZ32.decodeIdentity(peer) else {
-                    Self.log("allowConnect skipped, not a Pubky ID: \(peer)", level: .warn)
-                    continue
-                }
+        /// Takes Bitkit's saved contacts. Each one is admitted with `allowConnect` once per process, so contacts saved
+        /// before enrolment, or while the app was closed, are admitted at the next start.
+        func setSavedContacts(_ publicKeys: [String]) async {
+            var seen: Set<Data> = []
+            savedContacts = publicKeys.compactMap { PubkyZ32.decodeIdentity($0) }.filter { seen.insert($0).inserted }
+            publishState()
+            await tendContacts()
+        }
+
+        /// A contact the user just saved in Bitkit's Add Contact flow.
+        func addContact(_ publicKey: String) async {
+            guard let identity = PubkyZ32.decodeIdentity(publicKey) else {
+                Self.log("contact skipped, not a Pubky ID", level: .warn)
+                return
+            }
+            Self.log("contact added \(PubkyZ32.encode(identity))")
+            if !savedContacts.contains(identity) {
+                savedContacts.append(identity)
+            }
+            publishState()
+            await tendContacts()
+        }
+
+        /// Admits every saved contact and works out whether each one has admitted Bitkit too. One pass at a time; a call
+        /// during a pass runs one more pass after it.
+        private func tendContacts() async {
+            guard let wallet else { return }
+            if isTending {
+                tendAgain = true
+                return
+            }
+            isTending = true
+            defer { isTending = false }
+            repeat {
+                tendAgain = false
+                await tendContactsOnce(wallet)
+            } while tendAgain
+        }
+
+        /// Admission is per direction: `allowConnect` lets the contact write to Bitkit's inbox, and only the contact can
+        /// let Bitkit write to theirs. Paykit v0.2 has no call that reads the other side's decision, so Bitkit learns it
+        /// from a delivery: it sends the contact a `resend_request` that selects one random, unknown message ID. The
+        /// contact's Dispatch refuses it (`WaitingForAdmission`) until the contact allows Bitkit, the outbox tries it
+        /// again at each flush, and its acceptance shows the contact allowed Bitkit. The contact has nothing to re-send,
+        /// so the request changes nothing on their side. Demo shortcut: a real wallet would track admission with a
+        /// purpose-made message or a Dispatch read.
+        private func tendContactsOnce(_ wallet: PaykitV2.NativeWallet) async {
+            for contact in savedContacts where !allowedThisRun.contains(contact) {
                 do {
-                    try await wallet.allowConnect(payee: bytes)
-                    Self.log("allowConnect \(PubkyZ32.encode(bytes)) ok")
+                    try await wallet.allowConnect(payee: contact)
+                    allowedThisRun.insert(contact)
+                    Self.log("allowConnect \(PubkyZ32.encode(contact)) ok")
                 } catch {
-                    Self.log("allowConnect \(PubkyZ32.encode(bytes)) failed: \(Self.describe(error))", level: .warn)
+                    Self.log("allowConnect \(PubkyZ32.encode(contact)) failed: \(Self.describe(error))", level: .warn)
                 }
+            }
+
+            let open = savedContacts.filter { allowedThisRun.contains($0) && links[PubkyZ32.encode($0)]?.connectedAtMs == nil }
+            if open.contains(where: { links[PubkyZ32.encode($0)]?.probeMsgId != nil }) {
+                do {
+                    try await wallet.flush()
+                } catch {
+                    Self.log("outbox flush failed: \(Self.describe(error))", level: .warn)
+                }
+            }
+
+            for contact in open {
+                let key = PubkyZ32.encode(contact)
+                var link = links[key] ?? ContactLink()
+                if let msgId = link.probeMsgId {
+                    link = await checkProbe(msgId, contact: key, link: link, wallet: wallet)
+                }
+                if link.connectedAtMs == nil, link.probeMsgId == nil {
+                    do {
+                        let probe = PaykitV2.ResendSelection(msgIds: [UUID().uuidString.lowercased()])
+                        let msgId = try await wallet.requestResend(counterparty: contact, selection: probe)
+                        link.probeMsgId = msgId
+                        Self.log("admission probe sent to \(key) msg=\(msgId)")
+                        link = await checkProbe(msgId, contact: key, link: link, wallet: wallet)
+                    } catch {
+                        Self.log("admission probe to \(key) failed: \(Self.describe(error))", level: .warn)
+                    }
+                }
+                links[key] = link
+            }
+            saveLinks()
+            publishState()
+        }
+
+        private func checkProbe(
+            _ msgId: String,
+            contact: String,
+            link: ContactLink,
+            wallet: PaykitV2.NativeWallet
+        ) async -> ContactLink {
+            var link = link
+            let delivery: PaykitV2.MessageDelivery?
+            do {
+                delivery = try await wallet.messageDelivery(msgId: msgId)
+            } catch {
+                Self.log("admission probe to \(contact) unreadable: \(Self.describe(error))", level: .warn)
+                return link
+            }
+            // Logged when the kind of state changes, not at every try.
+            let state: String
+            switch delivery {
+            case let .accepted(acceptedAtMs):
+                link.connectedAtMs = acceptedAtMs
+                link.probeMsgId = nil
+                state = "accepted"
+                Self.log("contact connected \(contact) via=probe acceptedAtMs=\(acceptedAtMs)")
+            case .waitingForAdmission:
+                state = "waitingForAdmission"
+            case let .queued(_, lastError):
+                state = "queued lastError=\(lastError ?? "none")"
+            case .kept:
+                state = "kept"
+            case .certificateNotCurrent:
+                state = "certificateNotCurrent"
+            case let .failed(reason, _):
+                // A refused probe is replaced by a new one at the next pass.
+                link.probeMsgId = nil
+                state = "failed reason=\(reason)"
+            case .other, nil:
+                link.probeMsgId = nil
+                state = delivery == nil ? "unknown to the outbox" : "other"
+            }
+            if lastLoggedDelivery[msgId] != state {
+                lastLoggedDelivery[msgId] = state
+                Self.log("admission probe to \(contact) msg=\(msgId) delivery=\(state)")
+            }
+            return link
+        }
+
+        /// A message from a contact Bitkit allowed also shows the contact allowed Bitkit: the contact's own Dispatch grants
+        /// a reply to whoever its apps write to.
+        private func noteMessage(from sender: Data) {
+            let key = PubkyZ32.encode(sender)
+            guard allowedThisRun.contains(sender), links[key]?.connectedAtMs == nil else { return }
+            var link = links[key] ?? ContactLink()
+            link.connectedAtMs = UInt64(Date().timeIntervalSince1970 * 1000)
+            links[key] = link
+            Self.log("contact connected \(key) via=message")
+            saveLinks()
+            publishState()
+        }
+
+        private var hasOpenProbes: Bool {
+            savedContacts.contains { links[PubkyZ32.encode($0)]?.connectedAtMs == nil }
+        }
+
+        private func publishState() {
+            var connections: [String: PaykitV2ContactConnection] = [:]
+            for contact in savedContacts {
+                let key = PubkyZ32.encode(contact)
+                if links[key]?.connectedAtMs != nil {
+                    connections[key] = .connected
+                } else if wallet != nil {
+                    connections[key] = .waiting
+                }
+            }
+            let isReady = wallet != nil
+            Task { @MainActor in
+                PaykitV2DemoState.shared.apply(isReady: isReady, connections: connections)
+            }
+        }
+
+        private static func readLinks(_ url: URL?) -> [String: ContactLink] {
+            guard let url, FileManager.default.fileExists(atPath: url.path) else { return [:] }
+            do {
+                return try JSONDecoder().decode([String: ContactLink].self, from: Data(contentsOf: url))
+            } catch {
+                log("contacts.json unreadable, starting empty: \(error)", level: .warn)
+                return [:]
+            }
+        }
+
+        private func saveLinks() {
+            guard let linksURL else { return }
+            do {
+                try JSONEncoder().encode(links).write(to: linksURL, options: [.atomic, .completeFileProtection])
+            } catch {
+                Self.log("contacts.json not written: \(error)", level: .warn)
             }
         }
 
@@ -202,7 +394,9 @@
                 do {
                     try await drain(launch, wallet: wallet, store: store, homeserver: homeserver)
                     try await logNewRequests(wallet: wallet)
-                    let wake = try await wallet.feedWait(seconds: 20)
+                    await tendContacts()
+                    // While a contact has not admitted Bitkit yet, wait less, so the outbox retries the probe soon after.
+                    let wake = try await wallet.feedWait(seconds: hasOpenProbes ? 3 : 20)
                     Self.log("feed wait round=\(round) wake=\(wake)")
                 } catch {
                     Self.log("feed loop error round=\(round): \(Self.describe(error))", level: .warn)
@@ -224,6 +418,9 @@
                 let report = try await wallet.receive()
                 for event in report.events {
                     Self.log("event \(Self.describe(event.data))")
+                    if case let .messageReceived(_, _, _, _, sender) = event.data {
+                        noteMessage(from: sender)
+                    }
                 }
                 if !report.events.isEmpty || report.more || report.scopeKeysAwaited || report.recordsUnlisted != nil {
                     Self.log(

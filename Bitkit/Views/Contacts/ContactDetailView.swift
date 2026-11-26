@@ -13,6 +13,9 @@ struct ContactDetailView: View {
     @EnvironmentObject var wallet: WalletViewModel
     @Environment(HwWalletManager.self) private var hwWalletManager
     @Environment(PaykitPaymentRequestManager.self) private var paymentRequests
+    #if DEBUG
+        @ObservedObject private var paykitV2 = PaykitV2DemoState.shared
+    #endif
 
     let publicKey: String
     var showsDeleteAction = false
@@ -97,6 +100,14 @@ struct ContactDetailView: View {
                 )
                 .padding(.top, 24)
                 .padding(.bottom, 24)
+
+                #if DEBUG
+                    if let connection = paykitV2.connection(for: publicKey) {
+                        PaykitV2ConnectionBadge(connection: connection, contactName: profile.name)
+                            .padding(.top, -8)
+                            .padding(.bottom, 24)
+                    }
+                #endif
 
                 contactActions
                     .padding(.bottom, 24)

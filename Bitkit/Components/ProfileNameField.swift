@@ -7,6 +7,7 @@ struct ProfileNameField: View {
     @Binding var name: String
     let accessibilityId: String
     var focusesWhenEmpty = false
+    var placeholder: String = t("profile__create_name_placeholder")
 
     @FocusState private var isFocused: Bool
 
@@ -15,7 +16,7 @@ struct ProfileNameField: View {
     }
 
     var body: some View {
-        SwiftUI.TextField(t("profile__create_name_placeholder"), text: $name)
+        SwiftUI.TextField(placeholder, text: $name)
             .font(Fonts.black(size: 44))
             .kerning(-1)
             .multilineTextAlignment(.center)

@@ -22,6 +22,8 @@ struct AddContactView: View {
     @State private var errorMessage: String?
     @State private var canRetryError = true
     @State private var hasPayableEndpoint = false
+    /// Demo: the name the user gives a contact that has no profile.
+    @State private var contactName = ""
 
     private var truncatedPublicKey: String {
         PubkyPublicKeyFormat.displayTruncated(normalizedPublicKey ?? publicKey)
@@ -59,6 +61,8 @@ struct AddContactView: View {
             await loadProfile()
         }
         .task(id: fetchedProfile?.publicKey) { [profileKey = fetchedProfile?.publicKey] in
+            // Demo: contacts are paid over Paykit v0.2, so no v0.1 public endpoint is looked up.
+            guard !PaykitV2Demo.isEnabled else { return }
             guard let profileKey, !Task.isCancelled, fetchedProfile?.publicKey == profileKey else { return }
             let hasEndpoint = await (try? loadPaymentEndpoint(profileKey)) == true
             guard !Task.isCancelled, fetchedProfile?.publicKey == profileKey else { return }
@@ -133,7 +137,10 @@ struct AddContactView: View {
                         name: profile.name,
                         bio: profile.bio,
                         imageUrl: profile.imageUrl,
-                        showDivider: false
+                        showDivider: false,
+                        nameAccessibilityIdentifier: namesContact(profile) ? "AddContactName" : nil,
+                        editableName: namesContact(profile) ? $contactName : nil,
+                        editableNamePlaceholder: t("contacts__add_name_placeholder")
                     )
                     .padding(.top, 24)
                 }
@@ -145,7 +152,7 @@ struct AddContactView: View {
             BottomActionBar {
                 VStack(alignment: .leading, spacing: 16) {
                     BodySText(
-                        t("contacts__add_disclaimer", variables: ["name": profile.name]),
+                        t("contacts__add_disclaimer", variables: ["name": displayName(profile)]),
                         textColor: .white50
                     )
                     .multilineTextAlignment(.leading)
@@ -232,6 +239,12 @@ struct AddContactView: View {
             }
             return
         case let .valid(normalizedKey):
+            if PaykitV2Demo.isEnabled {
+                // Demo: the other wallet may have no profile anywhere. Look one up briefly, then let the user name it.
+                fetchedProfile = await demoContactProfile(publicKey: normalizedKey)
+                isLoading = false
+                return
+            }
             if let profile = await contactsManager.fetchContactProfile(publicKey: normalizedKey, includePlaceholder: true, retryTransient: true) {
                 guard !Task.isCancelled else { return }
                 fetchedProfile = profile
@@ -259,7 +272,7 @@ struct AddContactView: View {
             let identity = pubkyProfile.publicKey
             try await contactsManager.addContact(
                 publicKey: normalizedPublicKey,
-                existingProfile: fetchedProfile,
+                existingProfile: fetchedProfile.map(namedProfile),
                 ownPublicKey: identity
             )
             await PrivatePaykitService.shared.startExplicitContactLink(publicKey: normalizedPublicKey, expectedIdentity: identity, wallet: wallet)
@@ -268,6 +281,57 @@ struct AddContactView: View {
             Logger.error("Failed to save contact: \(error)", context: "AddContactView")
             app.toast(type: .error, title: t("contacts__add_error"), description: error.localizedDescription)
         }
+    }
+
+    // MARK: - Demo naming
+
+    /// Demo: a contact without a profile gets a name field, filled in by the user.
+    private func namesContact(_ profile: PubkyProfile) -> Bool {
+        PaykitV2Demo.isEnabled && profile.isPlaceholder
+    }
+
+    private func displayName(_ profile: PubkyProfile) -> String {
+        let typed = contactName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return namesContact(profile) && !typed.isEmpty ? typed : profile.name
+    }
+
+    /// The profile to save: the typed name in place of the shortened key, when the user gave one.
+    private func namedProfile(_ profile: PubkyProfile) -> PubkyProfile {
+        guard namesContact(profile) else { return profile }
+        return PubkyProfile(
+            publicKey: profile.publicKey,
+            name: displayName(profile),
+            bio: profile.bio,
+            imageUrl: profile.imageUrl,
+            links: profile.links,
+            tags: profile.tags,
+            status: profile.status
+        )
+    }
+
+    /// Demo: the contact's profile when one resolves within a few seconds, otherwise a placeholder with the shortened key.
+    private func demoContactProfile(publicKey: String) async -> PubkyProfile {
+        let contactsManager = contactsManager
+        // The lookup does not stop when cancelled, so it runs on its own and only its answer is raced against the clock.
+        let (answers, continuation) = AsyncStream<PubkyProfile?>.makeStream(bufferingPolicy: .bufferingOldest(1))
+        let lookup = Task {
+            continuation.yield(await contactsManager.fetchContactProfile(publicKey: publicKey))
+        }
+        let clock = Task {
+            try? await Task.sleep(for: .seconds(3))
+            continuation.yield(nil)
+        }
+        defer {
+            lookup.cancel()
+            clock.cancel()
+            continuation.finish()
+        }
+        var resolved: PubkyProfile?
+        for await answer in answers {
+            resolved = answer
+            break
+        }
+        return resolved ?? PubkyProfile.forDisplay(publicKey: publicKey, name: nil, imageUrl: nil)
     }
 
     private func payContact() async {

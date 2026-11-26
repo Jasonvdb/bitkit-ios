@@ -13,7 +13,6 @@
     /// | `PAYKIT_V2_STAGING_HOMESERVER_URL` | `https://homeserver.staging.pubky.app` |
     /// | `PAYKIT_V2_DISPATCH_ORIGIN` | `https://localhost:18580` (the origin the Dispatch requests are signed for) |
     /// | `PAYKIT_V2_DISPATCH_LISTENER` | `http://127.0.0.1:18580` (where they are sent, plain HTTP on loopback) |
-    /// | `PAYKIT_V2_ALLOW_PEERS` | none; comma-separated Pubky IDs admitted with `allowConnect` at start |
     struct PaykitV2Config {
         enum HomeserverBackend: String {
             case fake
@@ -25,7 +24,6 @@
         let stagingHomeserverUrl: URL
         let dispatchOrigin: String
         let dispatchListener: String
-        let allowPeers: [String]
 
         static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> PaykitV2Config {
             func value(_ key: String) -> String? {
@@ -41,11 +39,7 @@
                 stagingHomeserverUrl: value("PAYKIT_V2_STAGING_HOMESERVER_URL").flatMap(URL.init(string:))
                     ?? URL(string: "https://homeserver.staging.pubky.app")!,
                 dispatchOrigin: value("PAYKIT_V2_DISPATCH_ORIGIN") ?? "https://localhost:18580",
-                dispatchListener: value("PAYKIT_V2_DISPATCH_LISTENER") ?? "http://127.0.0.1:18580",
-                allowPeers: (value("PAYKIT_V2_ALLOW_PEERS") ?? "")
-                    .split(separator: ",")
-                    .map { $0.trimmingCharacters(in: .whitespaces) }
-                    .filter { !$0.isEmpty }
+                dispatchListener: value("PAYKIT_V2_DISPATCH_LISTENER") ?? "http://127.0.0.1:18580"
             )
         }
     }

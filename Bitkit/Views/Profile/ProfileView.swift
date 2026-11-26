@@ -110,7 +110,8 @@ struct ProfileView: View {
                     imageUrl: profile.imageUrl,
                     showDivider: false,
                     nameAccessibilityIdentifier: "ProfileViewName",
-                    notesAccessibilityIdentifier: "ProfileViewNotes"
+                    notesAccessibilityIdentifier: "ProfileViewNotes",
+                    keyAccessibilityIdentifier: "ProfilePublicKey"
                 )
                 .padding(.top, 16)
                 .padding(.bottom, 16)

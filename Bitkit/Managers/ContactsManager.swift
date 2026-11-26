@@ -742,6 +742,10 @@ class ContactsManager: ObservableObject {
         )
 
         Logger.info("Added contact \(PubkyPublicKeyFormat.redacted(prefixedKey))", context: "ContactsManager")
+        #if DEBUG
+            // Demo: Paykit v0.2 admits the new contact (`allowConnect`).
+            PaykitV2DemoState.contactAdded(prefixedKey)
+        #endif
 
         rememberResolvedProfile(profile, for: prefixedKey)
         let contact = PubkyContact(publicKey: prefixedKey, profile: profile)

@@ -12,7 +12,7 @@
     /// files that import only `PaykitV2`.
     enum PaykitV2Launcher {
         static var isEnabled: Bool {
-            Env.usesLocalRegtest
+            PaykitV2Demo.isEnabled
         }
 
         static func startIfEnabled(walletIndex: Int = 0) {
