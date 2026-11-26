@@ -400,7 +400,8 @@ final class SparkManager: ChannelFreeLightningRail {
     private static var sparkNetwork: BreezSdkSpark.Network? {
         switch Env.network {
         case .bitcoin: Env.breezApiKey == nil ? nil : .mainnet
-        case .regtest: .regtest
+        // Spark's regtest is Lightspark's own chain, not the local regtest the demo build runs on.
+        case .regtest: Env.usesLocalRegtest ? nil : .regtest
         default: nil
         }
     }
