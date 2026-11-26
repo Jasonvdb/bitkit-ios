@@ -50,6 +50,10 @@ struct ProfileView: View {
         Group {
             if let profile = pubkyProfile.profileForDisplay {
                 profileContent(profile)
+            } else if PaykitV2Demo.isEnabled, let cachedProfile = pubkyProfile.cachedProfilePreview {
+                // Demo: the key, name and QR code are known on the device, so a slow Pubky staging Homeserver does not
+                // hold the identity back while the session restores.
+                profileContent(cachedProfile, isCachedPreview: true)
             } else if pubkyProfile.isLoadingProfile || !pubkyProfile.isAuthenticated, let cachedProfile = pubkyProfile.cachedProfilePreview {
                 cachedProfileContent(cachedProfile)
             } else {
@@ -100,7 +104,7 @@ struct ProfileView: View {
             .padding(.horizontal, 16)
     }
 
-    private func profileContent(_ profile: PubkyProfile) -> some View {
+    private func profileContent(_ profile: PubkyProfile, isCachedPreview: Bool = false) -> some View {
         InsetHeaderScrollView(header: { navigationBar }) {
             VStack(spacing: 0) {
                 CenteredProfileHeader(
@@ -136,7 +140,7 @@ struct ProfileView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.bottom, 16)
 
-                if !canEditProfile {
+                if !canEditProfile, !isCachedPreview {
                     retryButton
                         .padding(.bottom, 16)
                     signOutButton

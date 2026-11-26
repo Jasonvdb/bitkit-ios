@@ -561,6 +561,10 @@ struct PaymentRequestsView: View {
     }
 
     private func historyDate(for request: PaykitPaymentRequest) -> String {
+        if PaykitV2Demo.isEnabled, let note = request.note, !note.isEmpty {
+            // Demo: rows from one contact differ by their note, and the section header already names the day.
+            return request.createdAt.map { note + " · " + Self.timeFormatter.string(from: $0) } ?? note
+        }
         guard let createdAt = request.createdAt else { return status(for: request) }
         let date = Self.dateFormatter.string(from: createdAt)
         guard allowances.autoPaidRequestIds.contains(request.id) else { return date }
@@ -571,6 +575,13 @@ struct PaymentRequestsView: View {
         let formatter = DateFormatter()
         formatter.locale = .autoupdatingCurrent
         formatter.setLocalizedDateFormatFromTemplate("MMMMd")
+        return formatter
+    }()
+
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.setLocalizedDateFormatFromTemplate("Hm")
         return formatter
     }()
 

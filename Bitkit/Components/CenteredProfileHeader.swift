@@ -61,17 +61,26 @@ struct CenteredProfileHeader: View {
         if let imageUrl {
             PubkyImage(uri: imageUrl, size: avatarSize)
         } else {
-            Circle()
-                .fill(Color.gray5)
-                .frame(width: avatarSize, height: avatarSize)
-                .overlay {
-                    Image("user-square")
-                        .resizable()
-                        .scaledToFit()
-                        .foregroundColor(.white32)
-                        .frame(width: avatarSize * 0.5, height: avatarSize * 0.5)
-                }
+            DefaultProfileAvatar(size: avatarSize)
         }
+    }
+}
+
+/// The avatar of a profile without a picture.
+struct DefaultProfileAvatar: View {
+    var size: CGFloat = 96
+
+    var body: some View {
+        Circle()
+            .fill(Color.gray5)
+            .frame(width: size, height: size)
+            .overlay {
+                Image("user-square")
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundColor(.white32)
+                    .frame(width: size * 0.5, height: size * 0.5)
+            }
     }
 }
 

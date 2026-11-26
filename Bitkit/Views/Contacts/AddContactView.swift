@@ -81,8 +81,15 @@ struct AddContactView: View {
                 .padding(.top, 24)
                 .padding(.bottom, 16)
 
-            ContactAvatarLetter(source: publicKey, size: 96)
-                .padding(.bottom, 24)
+            Group {
+                if PaykitV2Demo.isEnabled {
+                    // Demo: the avatar the name screen shows next, not a letter taken from the "pubky" prefix.
+                    DefaultProfileAvatar(size: 96)
+                } else {
+                    ContactAvatarLetter(source: publicKey, size: 96)
+                }
+            }
+            .padding(.bottom, 24)
 
             DisplayText(t("contacts__add_retrieving"), accentColor: .pubkyGreen)
                 .multilineTextAlignment(.center)
@@ -151,10 +158,7 @@ struct AddContactView: View {
 
             BottomActionBar {
                 VStack(alignment: .leading, spacing: 16) {
-                    BodySText(
-                        t("contacts__add_disclaimer", variables: ["name": displayName(profile)]),
-                        textColor: .white50
-                    )
+                    BodySText(disclaimer(profile), textColor: .white50)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -285,6 +289,13 @@ struct AddContactView: View {
 
     // MARK: - Demo naming
 
+    /// Demo: Paykit v0.2 has no public payments to warn about, and the copy does not repeat the contact's key.
+    private func disclaimer(_ profile: PubkyProfile) -> String {
+        PaykitV2Demo.isEnabled
+            ? t("contacts__add_disclaimer_paykit_v2")
+            : t("contacts__add_disclaimer", variables: ["name": displayName(profile)])
+    }
+
     /// Demo: a contact without a profile gets a name field, filled in by the user.
     private func namesContact(_ profile: PubkyProfile) -> Bool {
         PaykitV2Demo.isEnabled && profile.isPlaceholder
@@ -309,7 +320,7 @@ struct AddContactView: View {
         )
     }
 
-    /// Demo: the contact's profile when one resolves within a few seconds, otherwise a placeholder with the shortened key.
+    /// Demo: the contact's profile when one resolves within two seconds, otherwise a placeholder with the shortened key.
     private func demoContactProfile(publicKey: String) async -> PubkyProfile {
         let contactsManager = contactsManager
         // The lookup does not stop when cancelled, so it runs on its own and only its answer is raced against the clock.
@@ -318,7 +329,7 @@ struct AddContactView: View {
             continuation.yield(await contactsManager.fetchContactProfile(publicKey: publicKey))
         }
         let clock = Task {
-            try? await Task.sleep(for: .seconds(3))
+            try? await Task.sleep(for: .seconds(2))
             continuation.yield(nil)
         }
         defer {

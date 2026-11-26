@@ -3186,10 +3186,12 @@ final class PaykitPaymentRequestManager {
                         ))
                     } else {
                         Haptics.notify(.success)
+                        // Shorter than the usual 4 s: it covers the header (the drawer menu and the requests bell).
                         ToastWindowManager.shared.showToast(Toast(
                             type: .success,
                             title: t("wallet__toast_payment_success_title"),
                             description: t("contacts__activity_sent_to", variables: ["name": name]),
+                            visibilityTime: 2.5,
                             accessibilityIdentifier: "PaykitV2PaidToast"
                         ))
                     }

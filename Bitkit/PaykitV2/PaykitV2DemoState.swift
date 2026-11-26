@@ -107,6 +107,14 @@
 
         /// Saved contacts' display names by z-base-32 identity, for toasts outside the views.
         private var contactNames: [String: String] = [:]
+        /// When each request Bitkit sent turned paid while the app ran, by request hash; earlier ones are absent.
+        private var paidAt: [String: Date] = [:]
+        private var hasOutgoingRequests = false
+
+        /// How long a request Bitkit sent shows "paid" before Bitkit's own "Received Bitcoin" sheet may cover it.
+        static let paidCardMinimumTime: TimeInterval = 4
+        /// The longest the "Received Bitcoin" sheet waits for a request that may be paid by its transaction.
+        private static let receivedSheetMaximumHold: TimeInterval = 15
 
         /// The saved contact's display name, if the identity is a saved contact.
         func contactName(for publicKey: String) -> String? {
@@ -149,8 +157,38 @@
         }
 
         func apply(outgoingRequests: [PaykitV2OutgoingRequest]) {
+            if hasOutgoingRequests {
+                let wasPaid = Set(self.outgoingRequests.filter { $0.status == .receipted }.map(\.id))
+                for row in outgoingRequests where row.status == .receipted && !wasPaid.contains(row.id) && paidAt[row.id] == nil {
+                    paidAt[row.id] = Date()
+                }
+            }
+            hasOutgoingRequests = true
             if self.outgoingRequests != outgoingRequests {
                 self.outgoingRequests = outgoingRequests
+            }
+        }
+
+        /// Waits before Bitkit shows its "Received Bitcoin" sheet for `txid`, so the Sent screen's "paid" is readable
+        /// first: while the request that transaction paid has shown "paid" for less than `paidCardMinimumTime`, and, up to
+        /// `receivedSheetMaximumHold`, while a request Bitkit sent still waits for a proof (the wallet can see the
+        /// transaction before the payer's proof arrives). Returns at once for any other transaction.
+        func holdReceivedSheet(txid: String) async {
+            let deadline = Date().addingTimeInterval(Self.receivedSheetMaximumHold)
+            while Date() < deadline {
+                if let row = outgoingRequests.first(where: { $0.txid == txid }), row.status == .receipted {
+                    guard let paidAt = paidAt[row.id] else { return }
+                    let remaining = paidAt.addingTimeInterval(Self.paidCardMinimumTime).timeIntervalSinceNow
+                    if remaining > 0 {
+                        try? await Task.sleep(for: .seconds(remaining))
+                    }
+                    return
+                }
+                let awaitingProof = outgoingRequests.contains { row in
+                    row.txid == txid || (row.txid == nil && [.requested, .accepted, .proofReceived].contains(row.status))
+                }
+                guard awaitingProof else { return }
+                try? await Task.sleep(for: .milliseconds(250))
             }
         }
 

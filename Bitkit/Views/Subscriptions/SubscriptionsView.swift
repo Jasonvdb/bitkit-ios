@@ -52,7 +52,13 @@ struct SubscriptionsView: View {
 
     init(showPayments: Bool = false) {
         self.showPayments = showPayments
-        _selectedTab = State(initialValue: showPayments ? .payments : .overview)
+        _selectedTab = State(initialValue: showPayments || Self.isPaymentsOnly ? .payments : .overview)
+    }
+
+    /// Demo: Paykit v0.2 has payment requests only, so the screen is the Payments list, titled after it, without the
+    /// subscription and allowance tabs.
+    private static var isPaymentsOnly: Bool {
+        PaykitV2Demo.isEnabled
     }
 
     private var proposals: [PaykitSubscription] {
@@ -106,7 +112,7 @@ struct SubscriptionsView: View {
             await paymentRequests.refresh()
         }
         .onChange(of: showPayments) { _, showPayments in
-            selectedTab = showPayments ? .payments : .overview
+            selectedTab = showPayments || Self.isPaymentsOnly ? .payments : .overview
         }
         .onChange(of: areAllowancesEnabled) { _, enabled in
             if !enabled, selectedTab == .allowances {
@@ -134,21 +140,30 @@ struct SubscriptionsView: View {
 
     private var header: some View {
         VStack(spacing: 0) {
-            NavigationBar(title: t("subscriptions__title"))
-            SegmentedControl(
-                selectedTab: $selectedTab,
-                tabItems: [
-                    TabItem(Tab.overview),
-                    TabItem(Tab.allowances),
-                    TabItem(Tab.payments, badge: allowances.payable(paymentRequests.pendingRequests).count),
-                ].filter { areAllowancesEnabled || $0.tab != .allowances },
-                inactiveColor: .white.opacity(0.5)
-            )
+            if Self.isPaymentsOnly {
+                // `Tab-payments` stays on the title so recording scripts that open the Payments tab keep working.
+                NavigationBar(title: t("subscriptions__payments"), titleAccessibilityIdentifier: "Tab-payments")
+            } else {
+                NavigationBar(title: t("subscriptions__title"))
+                tabs
+            }
         }
         .padding(.horizontal, 16)
         .background(BlurView().ignoresSafeArea(edges: .top))
         .compositingGroup()
         .shadow(color: .black.opacity(0.5), radius: 8, x: 0, y: 20)
+    }
+
+    private var tabs: some View {
+        SegmentedControl(
+            selectedTab: $selectedTab,
+            tabItems: [
+                TabItem(Tab.overview),
+                TabItem(Tab.allowances),
+                TabItem(Tab.payments, badge: allowances.payable(paymentRequests.pendingRequests).count),
+            ].filter { areAllowancesEnabled || $0.tab != .allowances },
+            inactiveColor: .white.opacity(0.5)
+        )
     }
 
     private var overview: some View {
