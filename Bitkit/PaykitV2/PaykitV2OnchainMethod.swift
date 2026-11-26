@@ -202,7 +202,13 @@
                 entry.paidAtMs = Self.nowMs()
                 try? record(entry, for: payment.attemptId)
                 PaykitV2Service.log("pay attempt=\(payment.attemptId) sent txid=\(txid)")
-                Task { try? await LightningService.shared.sync() }
+                Task {
+                    // The first sync can run before the Electrum server indexed the new transaction; the second one
+                    // lists the send on Home without waiting for the next periodic sync (about 10 s).
+                    try? await LightningService.shared.sync()
+                    try? await Task.sleep(for: .milliseconds(1500))
+                    try? await LightningService.shared.sync()
+                }
                 return .paid(proofJson: Self.proof(txid: txid), paidAtMs: entry.paidAtMs)
             case let .rejected(txid, reason):
                 entry.state = .failed

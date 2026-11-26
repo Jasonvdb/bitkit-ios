@@ -12,6 +12,7 @@ struct NavigationBar: View {
     let titleKerning: CGFloat
     let titleLineHeight: CGFloat?
     let onBack: (() -> Void)?
+    let titleAccessibilityIdentifier: String?
 
     init(
         title: String,
@@ -21,7 +22,8 @@ struct NavigationBar: View {
         icon: String? = nil,
         titleKerning: CGFloat = 0.4,
         titleLineHeight: CGFloat? = nil,
-        onBack: (() -> Void)? = nil
+        onBack: (() -> Void)? = nil,
+        titleAccessibilityIdentifier: String? = nil
     ) {
         self.title = title
         self.titleKerning = titleKerning
@@ -31,6 +33,7 @@ struct NavigationBar: View {
         self.action = action
         self.icon = icon
         self.onBack = onBack
+        self.titleAccessibilityIdentifier = titleAccessibilityIdentifier
     }
 
     var body: some View {
@@ -72,6 +75,7 @@ struct NavigationBar: View {
                 TitleText(title, kerning: titleKerning, lineHeight: titleLineHeight)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifierIfPresent(titleAccessibilityIdentifier)
             }
             .frame(maxWidth: .infinity, alignment: .center)
 

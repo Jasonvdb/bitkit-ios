@@ -27,10 +27,17 @@ struct ContactDetailView: View {
     @State private var showDeleteConfirmation = false
     @State private var isPayLoading = false
     @State private var payTask: Task<Void, Never>?
+    /// Demo: the page opened right after saving reads "Contact Saved" for a moment, then becomes the contact's page.
+    @State private var hasSavedMomentPassed = false
+
+    /// The page right after the contact was saved: titled "Contact Saved", with Delete in place of Edit.
+    private var isSavedMoment: Bool {
+        showsDeleteAction && !hasSavedMomentPassed
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            NavigationBar(title: t(showsDeleteAction ? "contacts__saved_title" : "contacts__detail_title"))
+            NavigationBar(title: t(isSavedMoment ? "contacts__saved_title" : "contacts__detail_title"))
                 .padding(.horizontal, 16)
 
             if isLoading {
@@ -56,6 +63,14 @@ struct ContactDetailView: View {
         .task {
             if isPaymentRequestAvailable {
                 paymentRequests.startEligibleTargetRefresh(publicKey: publicKey)
+            }
+        }
+        .task {
+            guard PaykitV2Demo.isEnabled, showsDeleteAction else { return }
+            try? await Task.sleep(for: .seconds(2.5))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.25)) {
+                hasSavedMomentPassed = true
             }
         }
         .onDisappear {
@@ -169,16 +184,16 @@ struct ContactDetailView: View {
             .accessibilityIdentifier("ContactShare")
 
             GradientCircleButton(
-                icon: showsDeleteAction ? "trash-regular" : "pencil-regular",
-                accessibilityLabel: t(showsDeleteAction ? "common__delete" : "common__edit")
+                icon: isSavedMoment ? "trash-regular" : "pencil-regular",
+                accessibilityLabel: t(isSavedMoment ? "common__delete" : "common__edit")
             ) {
-                if showsDeleteAction {
+                if isSavedMoment {
                     showDeleteConfirmation = true
                 } else {
                     navigation.navigate(.editContact(publicKey: publicKey))
                 }
             }
-            .accessibilityIdentifier(showsDeleteAction ? "ContactDelete" : "ContactEdit")
+            .accessibilityIdentifier(isSavedMoment ? "ContactDelete" : "ContactEdit")
         }
     }
 

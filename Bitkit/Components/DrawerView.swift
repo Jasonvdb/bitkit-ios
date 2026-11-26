@@ -35,7 +35,8 @@ enum DrawerMenuItem: Int, CaseIterable, Identifiable, Hashable {
         switch self {
         case .wallet: return t("wallet__drawer__wallet")
         case .activity: return t("wallet__drawer__activity")
-        case .subscriptions: return t("subscriptions__title")
+        // Demo: the screen lists Paykit v0.2 payment requests only, so it is named after them.
+        case .subscriptions: return t(PaykitV2Demo.isEnabled ? "subscriptions__payments" : "subscriptions__title")
         case .contacts: return t("wallet__drawer__contacts")
         case .profile: return t("wallet__drawer__profile")
         case .widgets: return t("wallet__drawer__widgets")
@@ -116,7 +117,7 @@ struct DrawerView: View {
         switch item {
         case .wallet: return nil
         case .activity: return .activityList
-        case .subscriptions: return .subscriptions(showPayments: false)
+        case .subscriptions: return .subscriptions(showPayments: PaykitV2Demo.isEnabled)
         case .contacts: return .contacts
         case .profile: return .profile
         case .widgets: return nil

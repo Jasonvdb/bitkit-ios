@@ -13,4 +13,23 @@ enum PaykitV2Demo {
             false
         #endif
     }
+
+    #if DEBUG
+        /// Demo test hook: `PAYKIT_V2_DEMO_SLOW_V01_MS` makes every Paykit v0.1 SDK operation (the ones that can reach the
+        /// Pubky staging Homeserver) wait this long first, to check that no demo screen waits on staging. Unset or 0 adds
+        /// nothing.
+        private static let slowV01Delay: Duration? = {
+            guard Env.usesLocalRegtest,
+                  let raw = ProcessInfo.processInfo.environment["PAYKIT_V2_DEMO_SLOW_V01_MS"],
+                  let milliseconds = Int(raw.trimmingCharacters(in: .whitespaces)), milliseconds > 0
+            else { return nil }
+            return .milliseconds(milliseconds)
+        }()
+
+        /// Waits as long as `PAYKIT_V2_DEMO_SLOW_V01_MS` says before a v0.1 SDK operation; returns at once when unset.
+        static func simulateSlowV01() async {
+            guard let slowV01Delay else { return }
+            try? await Task.sleep(for: slowV01Delay)
+        }
+    #endif
 }

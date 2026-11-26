@@ -167,6 +167,10 @@ class ContactsManager: ObservableObject {
     private var resolvedProfiles: [String: ResolvedContactProfile] = [:]
     private var resolvedProfilesOwner: String?
     private var resolvedProfilesGeneration = 0
+    #if DEBUG
+        /// Demo: contacts added while their v0.1 record is still being written, by prefixed key.
+        private var demoContactsBeingSaved: [String: PubkyContact] = [:]
+    #endif
     private let contactRecords: @Sendable () async throws -> [ContactRecord]
     private let observedContactRecords: @Sendable (String) async throws -> [ContactRecord]
     private let fetchFollows: @Sendable (String) async throws -> [String]
@@ -273,6 +277,9 @@ class ContactsManager: ObservableObject {
         contactRefresh = nil
         loadGeneration += 1
         forgetResolvedProfiles(owner: nil)
+        #if DEBUG
+            demoContactsBeingSaved = [:]
+        #endif
         contacts = []
         isLoading = false
         hasLoaded = false
@@ -448,7 +455,11 @@ class ContactsManager: ObservableObject {
                 Logger.debug("Loaded \(records.count) SDK contact records", context: "ContactsManager")
 
                 let overrides = Self.loadContactProfileOverrides()
-                contacts = records.map { savedContact(from: $0, overrides: overrides) }.sorted(by: Self.isOrderedByName)
+                var loaded = records.map { savedContact(from: $0, overrides: overrides) }
+                #if DEBUG
+                    loaded = keepingDemoContactsBeingSaved(loaded)
+                #endif
+                contacts = loaded.sorted(by: Self.isOrderedByName)
                 hasLoaded = true
                 let now = currentDate()
                 refreshContactProfiles(
@@ -473,7 +484,11 @@ class ContactsManager: ObservableObject {
                 }
                 // A failed consolidated observation is not evidence that contacts were deleted.
                 if missingDataIsEmpty, Self.isMissingContactsDataError(error) {
-                    contacts = []
+                    #if DEBUG
+                        contacts = keepingDemoContactsBeingSaved([]).sorted(by: Self.isOrderedByName)
+                    #else
+                        contacts = []
+                    #endif
                     hasLoaded = true
                     loadErrorMessage = nil
                     await PrivatePaykitService.shared.pruneUnsavedContactState(
@@ -735,6 +750,17 @@ class ContactsManager: ObservableObject {
             try await resolveContactProfile(publicKey: prefixedKey, includePlaceholder: true, retryTransient: true)
         }
 
+        #if DEBUG
+            if PaykitV2Demo.isEnabled {
+                // Demo: Paykit v0.2 admits the new contact (`allowConnect`) and needs nothing from the v0.1 contact
+                // record, so the contact shows at once and its record is written in the background.
+                PaykitV2DemoState.contactAdded(prefixedKey)
+                let contact = showAddedContact(profile, publicKey: prefixedKey)
+                saveDemoContactRecord(contact)
+                return
+            }
+        #endif
+
         _ = try await PubkyService.saveContact(
             publicKey: prefixedKey,
             label: profile.name,
@@ -742,16 +768,62 @@ class ContactsManager: ObservableObject {
         )
 
         Logger.info("Added contact \(PubkyPublicKeyFormat.redacted(prefixedKey))", context: "ContactsManager")
-        #if DEBUG
-            // Demo: Paykit v0.2 admits the new contact (`allowConnect`).
-            PaykitV2DemoState.contactAdded(prefixedKey)
-        #endif
+        showAddedContact(profile, publicKey: prefixedKey)
+    }
 
+    @discardableResult
+    private func showAddedContact(_ profile: PubkyProfile, publicKey prefixedKey: String) -> PubkyContact {
         rememberResolvedProfile(profile, for: prefixedKey)
         let contact = PubkyContact(publicKey: prefixedKey, profile: profile)
         contacts.append(contact)
         contacts.sort(by: Self.isOrderedByName)
+        return contact
     }
+
+    #if DEBUG
+        /// Demo: writes a contact's v0.1 record (its label, at the Pubky staging Homeserver) without the user waiting for
+        /// it, trying three times. Until a contacts load returns the record, loads keep the contact listed; if every try
+        /// fails, the contact stays listed for this session only.
+        private func saveDemoContactRecord(_ contact: PubkyContact) {
+            let publicKey = contact.publicKey
+            let label = contact.profile.name
+            demoContactsBeingSaved[publicKey] = contact
+            Task {
+                for attempt in 1 ... 3 {
+                    do {
+                        _ = try await PubkyService.saveContact(publicKey: publicKey, label: label, restorePrivateConnection: true)
+                        Logger.info(
+                            "Demo: saved the contact record of \(PubkyPublicKeyFormat.redacted(publicKey)) (try \(attempt))",
+                            context: "ContactsManager"
+                        )
+                        return
+                    } catch {
+                        Logger.warn(
+                            "Demo: saving the contact record of \(PubkyPublicKeyFormat.redacted(publicKey)) failed (try \(attempt)): \(error)",
+                            context: "ContactsManager"
+                        )
+                        if attempt < 3 {
+                            try? await Task.sleep(for: .seconds(5))
+                        }
+                    }
+                }
+            }
+        }
+
+        /// Demo: the loaded contacts plus the ones whose record is still being written; forgets those the load returned.
+        private func keepingDemoContactsBeingSaved(_ loaded: [PubkyContact]) -> [PubkyContact] {
+            guard !demoContactsBeingSaved.isEmpty else { return loaded }
+            var kept = loaded
+            for (publicKey, contact) in demoContactsBeingSaved {
+                if loaded.contains(where: { PubkyPublicKeyFormat.matches($0.publicKey, publicKey) }) {
+                    demoContactsBeingSaved[publicKey] = nil
+                } else {
+                    kept.append(contact)
+                }
+            }
+            return kept
+        }
+    #endif
 
     func refreshContactLink(publicKey: String, wallet: WalletViewModel) async {
         guard let prefixedKey = PubkyPublicKeyFormat.normalized(publicKey),
@@ -977,6 +1049,9 @@ class ContactsManager: ObservableObject {
             try await removeContactRecord(prefixedKey)
         }.value
         contacts.removeAll { $0.publicKey == prefixedKey }
+        #if DEBUG
+            demoContactsBeingSaved[prefixedKey] = nil
+        #endif
         stopProfileLookups(for: [prefixedKey])
         Self.removeContactProfileOverride(publicKey: prefixedKey)
         await forgetRemovedContacts([prefixedKey])

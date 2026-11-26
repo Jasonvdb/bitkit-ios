@@ -27,6 +27,7 @@ struct ToastView: View {
         .background(BlurView())
         .cornerRadius(16)
         .shadow(color: .black.opacity(0.4), radius: 10, x: 0, y: 25)
+        .modifier(PaykitV2DemoToastLabel())
         .accessibilityIdentifierIfPresent(toast.accessibilityIdentifier)
         .overlay(alignment: .topTrailing) {
             if !toast.autoHide {
@@ -96,6 +97,17 @@ struct ToastView: View {
         case .lightning: return .purpleAccent
         case .warning: return .brandAccent
         case .error: return .brandAccent
+        }
+    }
+}
+
+/// Demo: a toast reads as one element whose label is its text, so recording scripts can check what it says.
+private struct PaykitV2DemoToastLabel: ViewModifier {
+    func body(content: Content) -> some View {
+        if PaykitV2Demo.isEnabled {
+            content.accessibilityElement(children: .combine)
+        } else {
+            content
         }
     }
 }

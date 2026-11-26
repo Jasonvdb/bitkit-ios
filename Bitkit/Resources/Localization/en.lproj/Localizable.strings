@@ -1305,6 +1305,7 @@
 "contacts__private_details_not_received" = "Not shared yet";
 "contacts__private_details_note" = "Private payment details are only visible to the two of you. Payments between you use them instead of public addresses.";
 "contacts__add_disclaimer" = "Please note that you and {name} must add each other as contacts before you can pay each other privately. If you pay without saving, the payment is visible publicly.";
+"contacts__add_disclaimer_paykit_v2" = "You and this contact need to add each other. Then you can request payments from each other and share private payment details.";
 "contacts__pay_private_link_pending" = "Bitkit is still setting up a private connection with this contact. Make sure they've added you as a contact too, or ask them to send you a payment request.";
 "contacts__import_nav_title" = "Import";
 "contacts__import_found_title" = "Found\n<accent>profile & contacts</accent>";

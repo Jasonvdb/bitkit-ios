@@ -1774,7 +1774,12 @@ actor PaykitSdkService {
             } else {
                 try await operationLock.withCancellableLock { try handle() }
             }
-            return try await publicReadSlots.withSlot(priority) { try await read(instance) }
+            return try await publicReadSlots.withSlot(priority) {
+                #if DEBUG
+                    await PaykitV2Demo.simulateSlowV01()
+                #endif
+                return try await read(instance)
+            }
         }
     }
 
@@ -1828,6 +1833,9 @@ actor PaykitSdkService {
                         #endif
                         try await beforeOperation()
                         try operationLock.checkWipeOwnership()
+                        #if DEBUG
+                            await PaykitV2Demo.simulateSlowV01()
+                        #endif
                         return try await .some(operation(handle()))
                     }
                 } catch OperationDeferral.paymentActive {

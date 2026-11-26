@@ -1863,6 +1863,13 @@ extension AppViewModel {
 
             await CoreService.shared.activity.markOnchainActivityAsSeen(txid: txid)
 
+            #if DEBUG
+                if PaykitV2Demo.isEnabled {
+                    // Demo: a contact's payment of a request first shows "paid" on the Sent screen this sheet replaces.
+                    await PaykitV2DemoState.shared.holdReceivedSheet(txid: txid)
+                }
+            #endif
+
             await MainActor.run {
                 sheetViewModel.showSheet(.receivedTx, data: ReceivedTxSheetDetails(type: .onchain, sats: sats, paymentId: txid))
             }
