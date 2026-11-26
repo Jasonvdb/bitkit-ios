@@ -118,7 +118,8 @@ struct HomeWalletView: View {
 
                 Spacer()
 
-                if settings.showWidgets, !app.hasDismissedWidgetsOnboardingHint {
+                // Demo: the "Swipe down to find your widgets" hint would sit beside every payment on Home.
+                if settings.showWidgets, !app.hasDismissedWidgetsOnboardingHint, !PaykitV2Demo.isEnabled {
                     WidgetsOnboardingView()
                 }
             } else {
