@@ -1460,6 +1460,10 @@ struct AppScene: View {
             app.markAppStatusInit()
             BackupService.shared.startObservingBackups()
             QuickPayPaymentCoordinator.shared.reconcileAgainstLdk()
+            #if DEBUG
+                // Demo: the Paykit v0.2 host (local regtest Debug builds only; starts once per process).
+                PaykitV2Launcher.startIfEnabled()
+            #endif
             Task {
                 if !PaykitFeatureFlags.isUIEnabled {
                     await retryPendingPaykitEndpointRemoval()
