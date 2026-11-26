@@ -557,7 +557,11 @@ struct PaymentRequestDetailsView: View {
     }
 
     private var enabledEndpoints: [String] {
-        PaykitPaymentRequestService.acceptedPaymentEndpointIdentifiers(canReceiveLightning: wallet.canReceiveLightning)
+        if PaykitV2Demo.isEnabled {
+            // Demo: Paykit v0.2 requests are paid on-chain to a fresh savings address.
+            return [PublicPaykitService.MethodId.regtestOnchainP2wpkh.rawValue]
+        }
+        return PaykitPaymentRequestService.acceptedPaymentEndpointIdentifiers(canReceiveLightning: wallet.canReceiveLightning)
     }
 
     private var selectedEnabledEndpoints: [String] {
@@ -652,8 +656,15 @@ struct PaymentRequestDetailsView: View {
 
 struct PaymentRequestSentView: View {
     @EnvironmentObject private var sheets: SheetViewModel
+    @Environment(PaykitPaymentRequestManager.self) private var paymentRequests
 
     let request: PaykitPaymentRequest
+
+    /// Demo (Paykit v0.2): the card follows the request, so it turns paid while this screen is open.
+    private var liveRequest: PaykitPaymentRequest {
+        guard PaykitV2Demo.isEnabled else { return request }
+        return paymentRequests.historyRequests.first { $0.id == request.id } ?? request
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -681,14 +692,16 @@ struct PaymentRequestSentView: View {
                 .padding(.bottom, 8)
 
             PaymentRequestCard(
-                request: request,
-                isHighlighted: false
+                request: liveRequest,
+                isHighlighted: false,
+                amountStatus: PaykitV2Demo.isEnabled ? PaymentRequestDisplay.outgoingAmountStatus(for: liveRequest) : nil
             )
             .padding(.bottom, 16)
 
             CustomButton(title: t("common__ok")) {
                 sheets.hideSheet(reason: "Payment request created")
             }
+            .accessibilityIdentifier("PaymentRequestSentOk")
         }
         .padding(.horizontal, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -13,6 +13,7 @@
     /// | `PAYKIT_V2_STAGING_HOMESERVER_URL` | `https://homeserver.staging.pubky.app` |
     /// | `PAYKIT_V2_DISPATCH_ORIGIN` | `https://localhost:18580` (the origin the Dispatch requests are signed for) |
     /// | `PAYKIT_V2_DISPATCH_LISTENER` | `http://127.0.0.1:18580` (where they are sent, plain HTTP on loopback) |
+    /// | `PAYKIT_V2_ESPLORA_URL` | `http://127.0.0.1:3000/api` (the regtest Esplora API the on-chain method verifies proofs with) |
     struct PaykitV2Config {
         enum HomeserverBackend: String {
             case fake
@@ -24,6 +25,7 @@
         let stagingHomeserverUrl: URL
         let dispatchOrigin: String
         let dispatchListener: String
+        let esploraUrl: URL
 
         static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> PaykitV2Config {
             func value(_ key: String) -> String? {
@@ -39,7 +41,8 @@
                 stagingHomeserverUrl: value("PAYKIT_V2_STAGING_HOMESERVER_URL").flatMap(URL.init(string:))
                     ?? URL(string: "https://homeserver.staging.pubky.app")!,
                 dispatchOrigin: value("PAYKIT_V2_DISPATCH_ORIGIN") ?? "https://localhost:18580",
-                dispatchListener: value("PAYKIT_V2_DISPATCH_LISTENER") ?? "http://127.0.0.1:18580"
+                dispatchListener: value("PAYKIT_V2_DISPATCH_LISTENER") ?? "http://127.0.0.1:18580",
+                esploraUrl: value("PAYKIT_V2_ESPLORA_URL").flatMap(URL.init(string:)) ?? URL(string: "http://127.0.0.1:3000/api")!
             )
         }
     }

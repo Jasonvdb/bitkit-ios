@@ -77,6 +77,8 @@ struct PaykitPaymentRequest: Identifiable, Hashable {
     let paymentProofEventId: String?
     /// An incoming request a Paykit server created for a merchant, such as a Pubky Market order.
     private(set) var isMerchantRequest = false
+    /// Demo (Paykit v0.2): an outgoing request whose payment Bitkit verified and receipted, shown as "Paid".
+    var isReceipted = false
 
     var requiresAcceptance: Bool {
         billingPeriod == nil && lifecycleState == .proposed
@@ -294,6 +296,7 @@ struct PaykitPaymentRequest: Identifiable, Hashable {
             paymentProofEventId: paymentProofEventId
         )
         request.isMerchantRequest = isMerchantRequest
+        request.isReceipted = isReceipted
         return request
     }
 
@@ -323,7 +326,8 @@ struct PaykitPaymentRequest: Identifiable, Hashable {
         paymentProofEventId = subscription.payments.last { $0.billingPeriod == billingPeriod }?.proofEventId
     }
 
-    private init(
+    /// Internal (not private) so the Paykit v0.2 demo mapping in `Bitkit/PaykitV2/` can build rows.
+    init(
         paymentRequestId: String,
         counterparty: String,
         proposalStreamItemId: UInt64?,
@@ -1481,6 +1485,8 @@ final class PaykitPaymentRequestManager {
     private var presentedSubscriptionProposalIds: Set<PaykitSubscription.ID> = []
     private var dismissedSubscriptionPaymentIds: Set<PaykitPaymentRequest.ID> = []
     private var persistedSubscriptionState = PaykitSubscriptionState()
+    /// Demo (Paykit v0.2): mirrors the v0.2 requests Bitkit sent into `historyRequests`.
+    @ObservationIgnored private var paykitV2Mirror: AnyCancellable?
 
     var outgoingRequests: [PaykitPaymentRequest] {
         historyRequests.filter { $0.direction == .outgoing }
@@ -1552,6 +1558,11 @@ final class PaykitPaymentRequestManager {
             await PrivatePaykitService.shared.schedulePrivatePaymentRecovery(for: $0)
         }
         self.logWarning = logWarning
+        #if DEBUG
+            if PaykitV2Demo.isEnabled {
+                mirrorPaykitV2Requests()
+            }
+        #endif
     }
 
     func activate(identity: String) {
@@ -1776,6 +1787,11 @@ final class PaykitPaymentRequestManager {
     }
 
     func propose(_ draft: PaykitPaymentRequestDraft, to target: PaykitPaymentRequestTarget) async throws -> PaykitPaymentRequest {
+        #if DEBUG
+            if PaykitV2Demo.isEnabled {
+                return try await proposePaykitV2(draft, to: target)
+            }
+        #endif
         guard draft.amount.atomic > 0,
               isAvailable(),
               let activeIdentity,
@@ -1911,6 +1927,13 @@ final class PaykitPaymentRequestManager {
         combineReceiveObservation: Bool = false,
         canRefresh: @escaping @MainActor () -> Bool = { true }
     ) async -> Bool {
+        #if DEBUG
+            if PaykitV2Demo.isEnabled {
+                // Demo: Paykit v0.2 owns the request rows; the v0.1 SDK is not asked.
+                applyPaykitV2Requests(PaykitV2DemoState.shared.outgoingRequests)
+                return true
+            }
+        #endif
         guard canRefresh() else { return false }
         if let refreshTask {
             let generation = stateGeneration
@@ -3050,3 +3073,54 @@ final class PaykitPaymentRequestManager {
         }
     }
 }
+
+#if DEBUG
+    // MARK: - Demo: Paykit v0.2 requests
+
+    extension PaykitPaymentRequestManager {
+        /// Sends the request through Paykit v0.2, paid on-chain to a fresh address, and lists it as an outgoing request.
+        fileprivate func proposePaykitV2(
+            _ draft: PaykitPaymentRequestDraft,
+            to target: PaykitPaymentRequestTarget
+        ) async throws -> PaykitPaymentRequest {
+            guard draft.amount.asset == .btc, draft.amount.atomic > 0, eligibleTargets.contains(target) else {
+                throw PaykitPaymentRequestError.requestUnavailable
+            }
+            guard !isCreatingRequest else {
+                throw PaykitPaymentRequestError.operationInProgress
+            }
+            isCreatingRequest = true
+            defer { isCreatingRequest = false }
+
+            let row = try await PaykitV2DemoState.sendRequest(
+                to: target.publicKey,
+                sats: draft.amount.atomic,
+                note: draft.note,
+                expiresAt: draft.expiresAt
+            )
+            let request = PaykitPaymentRequest(paykitV2Outgoing: row)
+            historyRequests.removeAll { $0.id == request.id }
+            historyRequests.insert(request, at: 0)
+            return request
+        }
+
+        fileprivate func mirrorPaykitV2Requests() {
+            paykitV2Mirror = PaykitV2DemoState.shared.$outgoingRequests
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] rows in
+                    self?.applyPaykitV2Requests(rows)
+                }
+        }
+
+        /// In demo mode every outgoing row is a Paykit v0.2 request: v0.1 refreshes are switched off.
+        fileprivate func applyPaykitV2Requests(_ rows: [PaykitV2OutgoingRequest]) {
+            let mapped = rows.map(PaykitPaymentRequest.init(paykitV2Outgoing:))
+            var updated = historyRequests.filter { $0.direction != .outgoing }
+            updated.append(contentsOf: mapped)
+            updated.sort { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
+            if updated != historyRequests {
+                historyRequests = updated
+            }
+        }
+    }
+#endif
