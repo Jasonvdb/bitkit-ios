@@ -229,7 +229,8 @@ extension PrivatePaykitService {
         requeueActive: Bool = false,
         operation: @escaping ([String], Bool) async -> Void
     ) {
-        guard !isDeletingProfile else { return }
+        // Demo: Paykit v0.2 links contacts; v0.1 prepares no private links or endpoints.
+        guard !PaykitV2Demo.isEnabled, !isDeletingProfile else { return }
         let keys = publicKeys.filter { requeueActive || forceRefreshLightning || !activePreparationKeys.contains($0) }
         guard !keys.isEmpty else { return }
         pendingPreparationKeys.formUnion(keys)
@@ -1121,7 +1122,7 @@ extension PrivatePaykitService {
         guard let publicKey = PubkyPublicKeyFormat.normalized(publicKey),
               let expectedIdentity = expectedIdentity.flatMap(PubkyPublicKeyFormat.normalized),
               PaykitFeatureFlags.isUIEnabled, PubkyProfileManager.hasLocalSecretKey(for: expectedIdentity),
-              !isDeletingProfile, !Task.isCancelled
+              !PaykitV2Demo.isEnabled, !isDeletingProfile, !Task.isCancelled
         else { return }
         _ = rememberSavedContacts([publicKey], replacing: false)
         scheduleExplicitContactLink(publicKey: publicKey, identity: expectedIdentity, startedAt: startedAt)
@@ -1145,7 +1146,7 @@ extension PrivatePaykitService {
     }
 
     func scheduleExplicitContactLink(publicKey: String, identity: String, startedAt: Date? = nil) {
-        guard !isDeletingProfile, knownSavedContactKeys.contains(publicKey),
+        guard !PaykitV2Demo.isEnabled, !isDeletingProfile, knownSavedContactKeys.contains(publicKey),
               !UserDefaults.standard.bool(forKey: Self.cleanupPendingKey)
         else { return }
         let now = messageRetryOperations.now()

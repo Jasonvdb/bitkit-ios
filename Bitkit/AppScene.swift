@@ -765,6 +765,10 @@ struct AppScene: View {
             }
             .onReceive(contactsManager.savedContactsChangedPublisher) { contacts in
                 let publicKeys = contacts.map(\.publicKey)
+                #if DEBUG
+                    // Demo: the Paykit v0.2 host admits every saved contact.
+                    PaykitV2DemoState.savedContactsChanged(publicKeys)
+                #endif
                 guard PaykitFeatureFlags.isUIEnabled,
                       wallet.walletExists == true,
                       pubkyProfile.authState == .authenticated, let pk = pubkyProfile.publicKey
@@ -1616,6 +1620,8 @@ struct AppScene: View {
     }
 
     private func refreshForegroundPublicPaykitEndpoints() async {
+        // Demo: Paykit v0.2 owns payments with contacts; v0.1 publishes no endpoints.
+        guard !PaykitV2Demo.isEnabled else { return }
         guard let session = publicPaykitForegroundSession, pubkyProfile.automaticPaykitSession == session else { return }
         await foregroundWalletSync?.value
         guard !Task.isCancelled, pubkyProfile.automaticPaykitSession == session else { return }
@@ -1626,7 +1632,7 @@ struct AppScene: View {
 
     /// Contact payments have no setting, so each foreground turns on whichever sharing mode is off.
     private func ensureContactPaymentsEnabled() async {
-        guard PaykitFeatureFlags.isUIEnabled, !wipeCoordinator.isGateUp,
+        guard !PaykitV2Demo.isEnabled, PaykitFeatureFlags.isUIEnabled, !wipeCoordinator.isGateUp,
               let session = publicPaykitForegroundSession, pubkyProfile.automaticPaykitSession == session
         else { return }
         await ContactPaymentsService.ensureEnabled(
@@ -1639,7 +1645,7 @@ struct AppScene: View {
     private func refreshPrivateOnlyPaykitApp() async {
         let publicSharingEnabled = UserDefaults.standard.bool(forKey: PublicPaykitService.publishingEnabledKey)
         let privateSharingEnabled = UserDefaults.standard.bool(forKey: PrivatePaykitService.publishingEnabledKey)
-        guard privateSharingEnabled, !publicSharingEnabled,
+        guard !PaykitV2Demo.isEnabled, privateSharingEnabled, !publicSharingEnabled,
               let session = pubkyProfile.automaticPaykitSession, await PubkyService.currentPublicKey() != nil,
               pubkyProfile.automaticPaykitSession == session else { return }
 
@@ -1651,6 +1657,7 @@ struct AppScene: View {
     }
 
     private func prepareSavedPaykitContacts(expectedIdentity: String? = nil) async {
+        guard !PaykitV2Demo.isEnabled else { return }
         guard let session = pubkyProfile.automaticPaykitSession,
               expectedIdentity == nil || PubkyPublicKeyFormat.matches(expectedIdentity, session.publicKey)
         else { return }
@@ -1682,6 +1689,12 @@ struct AppScene: View {
         }
 
         guard let session = pubkyProfile.currentSession else { return false }
+        if PaykitV2Demo.isEnabled {
+            // Demo: Paykit v0.2 runs its own feed loop. v0.1 reads no requests, and every saved contact can be asked
+            // for money.
+            await paykitPaymentRequestManager.refreshEligibleTargets(savedPublicKeys: contactsManager.contacts.map(\.publicKey))
+            return false
+        }
         let canRefresh = {
             !Task.isCancelled && (!onlyWhileActive || isPaykitSceneActive) &&
                 (automatic ? pubkyProfile.automaticPaykitSession : pubkyProfile.currentSession) == session
@@ -1828,6 +1841,7 @@ struct AppScene: View {
             }
             await refreshIncomingPaykitPaymentRequests(mode: mode, messagePriority: .background, onlyWhileActive: true)
             guard mode == .full,
+                  !PaykitV2Demo.isEnabled,
                   !Task.isCancelled,
                   scenePhase == .active,
                   network.isConnected,
@@ -1870,7 +1884,7 @@ struct AppScene: View {
     }
 
     private func presentNextIncomingPaykitPaymentRequest() async {
-        guard scenePhase == .active,
+        guard !PaykitV2Demo.isEnabled, scenePhase == .active,
               isPinVerified || !settings.pinEnabled,
               PaykitFeatureFlags.isUIEnabled,
               pubkyProfile.automaticPaykitSession != nil,
@@ -2410,7 +2424,7 @@ struct AppScene: View {
     }
 
     private func presentNextIncomingPaykitItem() async {
-        guard scenePhase == .active,
+        guard !PaykitV2Demo.isEnabled, scenePhase == .active,
               pubkyProfile.automaticPaykitSession != nil,
               isPinVerified || !settings.pinEnabled
         else { return }
@@ -2425,6 +2439,7 @@ struct AppScene: View {
     }
 
     private func retryPendingPaykitEndpointRemoval() async {
+        guard !PaykitV2Demo.isEnabled else { return }
         guard let session = pubkyProfile.automaticPaykitSession else { return }
         await ContactPaymentsService.reconcilePendingEndpoints(reconcilePrivate: {
             guard pubkyProfile.automaticPaykitSession == session else { return }

@@ -11,21 +11,34 @@ struct CenteredProfileHeader: View {
     /// Set on own Profile screen for E2E; omit on contact previews so IDs stay unique.
     var nameAccessibilityIdentifier: String?
     var notesAccessibilityIdentifier: String?
+    var keyAccessibilityIdentifier: String?
+    /// Shows a name field in place of the name, for a profile whose name the user gives.
+    var editableName: Binding<String>?
+    var editableNamePlaceholder: String = t("profile__create_name_placeholder")
 
     var body: some View {
         VStack(spacing: 16) {
             CaptionMText(truncatedKey, textColor: .white64)
+                .accessibilityIdentifierIfPresent(keyAccessibilityIdentifier)
 
             avatarView
 
-            Text(name.uppercased())
-                .font(Fonts.black(size: 44))
-                .kerning(-1)
-                .foregroundColor(.textPrimary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .accessibilityIdentifierIfPresent(nameAccessibilityIdentifier)
+            if let editableName {
+                ProfileNameField(
+                    name: editableName,
+                    accessibilityId: nameAccessibilityIdentifier ?? "ProfileHeaderNameField",
+                    placeholder: editableNamePlaceholder
+                )
+            } else {
+                Text(name.uppercased())
+                    .font(Fonts.black(size: 44))
+                    .kerning(-1)
+                    .foregroundColor(.textPrimary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .accessibilityIdentifierIfPresent(nameAccessibilityIdentifier)
+            }
 
             if showBio, !bio.isEmpty {
                 BodyMText(bio, textColor: .white64)

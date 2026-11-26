@@ -11,6 +11,9 @@ struct Header: View {
     @EnvironmentObject private var sheets: SheetViewModel
     @Environment(PaykitPaymentRequestManager.self) private var paymentRequests
     @Environment(PaykitAllowanceManager.self) private var allowances
+    #if DEBUG
+        @ObservedObject private var paykitV2 = PaykitV2DemoState.shared
+    #endif
 
     /// When true, shows the widget edit button (only on the widgets tab).
     var showWidgetEditButton: Bool = false
@@ -122,6 +125,15 @@ struct Header: View {
         }
     }
 
+    /// Demo: `paykit-v2-ready` once the Paykit v0.2 app runs, for recording scripts; empty otherwise.
+    private var paykitV2ReadyValue: String {
+        #if DEBUG
+            paykitV2.isReady ? "paykit-v2-ready" : ""
+        #else
+            ""
+        #endif
+    }
+
     private var profileButton: some View {
         Button {
             if dismissCalculatorIfNeeded() {
@@ -146,6 +158,7 @@ struct Header: View {
         }
         .accessibilityLabel(pubkyProfile.displayName ?? t("profile__nav_title"))
         .accessibilityIdentifier("ProfileButton")
+        .accessibilityValue(paykitV2ReadyValue)
     }
 
     static func profileDestination(for profile: PubkyProfileManager, hasSeenIntro: Bool) -> Route? {
