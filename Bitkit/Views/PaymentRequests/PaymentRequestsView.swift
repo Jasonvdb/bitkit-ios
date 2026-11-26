@@ -24,8 +24,9 @@ enum PaymentRequestDisplay {
     }
 
     /// The small status under an outgoing request's amount: "pending" until it is paid, then "paid" once receipted.
+    /// A request Bitkit paid reads "paid" once the payee's receipt arrived.
     static func outgoingAmountStatus(for request: PaykitPaymentRequest) -> String? {
-        guard request.direction == .outgoing else { return nil }
+        guard request.direction == .outgoing || request.isReceipted else { return nil }
         let key = request.isReceipted ? "wallet__payment_request_status_paid" : "wallet__payment_request_status_pending"
         return t(key).localizedLowercase
     }
@@ -89,6 +90,8 @@ struct PaymentRequestCard: View {
     var status: String?
     var isHighlighted = true
     var isActionDisabled = false
+    /// Shows the Pay button loading while the payment is being sent.
+    var isPaying = false
     var paymentDirection: PaykitPaymentRequest.Direction?
     var amountStatus: String?
     var onOpen: (() -> Void)?
@@ -173,7 +176,8 @@ struct PaymentRequestCard: View {
                         title: t("common__pay"),
                         size: .small,
                         icon: Image("coins").resizable().frame(width: 16, height: 16),
-                        isDisabled: isActionDisabled || isRejecting,
+                        isDisabled: (isActionDisabled && !isPaying) || isRejecting,
+                        isLoading: isPaying,
                         shouldExpand: true
                     ) {
                         onPay?()
@@ -338,6 +342,8 @@ struct PaymentRequestsSheet: View {
     private func requestCard(_ request: PaykitPaymentRequest) -> some View {
         PaymentRequestCard(
             request: request,
+            isActionDisabled: PaykitV2Demo.isEnabled && paymentRequests.requestedPresentationId != nil,
+            isPaying: PaykitV2Demo.isEnabled && paymentRequests.requestedPresentationId == request.id,
             onOpen: {
                 sheets.hideSheet(reason: "Opening payment request details")
                 navigation.navigate(.paymentRequestDetail(request.id))
@@ -347,6 +353,12 @@ struct PaymentRequestsSheet: View {
                     // Closing the sheet first would leave nothing on screen behind the toast.
                     if await allowances.isAutomaticallyHandling(request) {
                         app.toast(type: .info, title: t("subscriptions__allowance_payment_in_progress"))
+                        return
+                    }
+                    if PaykitV2Demo.isEnabled {
+                        // Demo: Paykit v0.2 pays at once. The sheet stays while Pay loads and closes by itself once no
+                        // request is left to pay.
+                        _ = paymentRequests.requestPresentation(request)
                         return
                     }
                     sheets.hideSheetBeforePerforming(reason: "Paying payment request") {
@@ -527,6 +539,7 @@ struct PaymentRequestsView: View {
             PaymentRequestCard(
                 request: request,
                 isActionDisabled: paymentRequests.requestedPresentationId == request.id,
+                isPaying: PaykitV2Demo.isEnabled && paymentRequests.requestedPresentationId == request.id,
                 onOpen: { navigation.navigate(.paymentRequestDetail(request.id)) },
                 onPay: { _ = paymentRequests.requestPresentation(request) },
                 onReject: paymentRequests.canDismiss(request) ? { await dismiss(request) } : nil

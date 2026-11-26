@@ -69,7 +69,6 @@
         private(set) var wallet: PaykitV2.NativeWallet?
         private(set) var identity: Data?
         private var loopTask: Task<Void, Never>?
-        private var seenRequests: Set<String> = []
 
         /// Bitkit's saved contacts (v0.1 contact records), as 32-byte identities in the order they came.
         private var savedContacts: [Data] = []
@@ -93,6 +92,25 @@
         /// Proofs Bitkit could not credit yet (the transaction was not visible, or not enough), by record (hex): tries.
         private var unconfirmedProofs: [String: Int] = [:]
         private var isTendingPayee = false
+
+        /// What the host remembers of a request a contact sent Bitkit (`incoming.json`), by request hash (hex). Paykit's
+        /// request view has no receive time and no transaction ID.
+        private struct IncomingEntry: Codable {
+            var firstSeenMs: UInt64
+            /// The attempt that paid it, once Bitkit paid.
+            var attemptId: String?
+            var txid: String?
+            /// The payee's receipt message, once it arrived.
+            var receiptMsgId: String?
+        }
+
+        /// Requests contacts sent Bitkit, by request hash (hex), as `requests()` last listed them.
+        private var incomingRequests: [String: PaykitV2.OneTimeRequest] = [:]
+        private var incoming: [String: IncomingEntry] = [:]
+        private var incomingURL: URL?
+        private var incomingStatus: [String: PaykitV2IncomingRequest.Status] = [:]
+        /// Requests Bitkit is paying now, so a second tap does not start a second payment.
+        private var payingNow: Set<String> = []
 
         /// Starts once per process; later calls do nothing.
         func start(_ launch: Launch) {
@@ -126,6 +144,8 @@
             links = Self.readLinks(linksURL)
             outgoingURL = launch.directory.appendingPathComponent("outgoing.json")
             outgoing = Self.readOutgoing(outgoingURL)
+            incomingURL = launch.directory.appendingPathComponent("incoming.json")
+            incoming = Self.readIncoming(incomingURL)
             publishState()
             publishOutgoing()
             await tendContacts()
@@ -140,7 +160,10 @@
             homeserver: PaykitV2Homeserver
         ) async throws -> PaykitV2.NativeWallet {
             let config = launch.config
-            let method = PaykitV2OnchainMethod(esploraUrl: config.esploraUrl)
+            let method = PaykitV2OnchainMethod(
+                esploraUrl: config.esploraUrl,
+                journalURL: launch.directory.appendingPathComponent("payments.json")
+            )
             self.method = method
             let host = try PaykitV2.WalletHost.newLocalDevelopment(
                 store: store,
@@ -690,7 +713,7 @@
                 round += 1
                 do {
                     try await drain(launch, wallet: wallet, store: store, homeserver: homeserver)
-                    try await logNewRequests(wallet: wallet)
+                    await tendIncoming(wallet)
                     await tendContacts()
                     await tendPayeeActivity()
                     // While a contact has not admitted Bitkit yet, wait less, so the outbox retries the probe soon after.
@@ -746,16 +769,230 @@
             Self.log("receive still reports more after \(passes) passes; continuing after the feed wait", level: .warn)
         }
 
-        private func logNewRequests(wallet: PaykitV2.NativeWallet) async throws {
-            for request in try await wallet.requests() {
-                let key = request.id.requestHash.hex + ":\(request.status)"
-                guard seenRequests.insert(key).inserted else { continue }
-                Self.log(
-                    "request from=\(PubkyZ32.encode(request.id.payee)) ref=\(request.paymentReference) "
-                        + "amount=\(request.amount.value) \(request.amount.asset) status=\(request.status) "
-                        + "requestHash=\(request.id.requestHash.hex) manualOnly=\(request.manualOnly)"
-                )
+        // MARK: - Requests contacts send Bitkit (Bitkit is the payer)
+
+        enum PayError: LocalizedError {
+            case notReady
+            case unknownRequest
+            case notPayable
+            case refused(String)
+            case failed
+
+            var errorDescription: String? {
+                switch self {
+                case .notReady: "Payments with this contact are still starting. Try again in a moment."
+                case .unknownRequest: "This payment request is no longer available."
+                case .notPayable: "This payment request can no longer be paid."
+                case let .refused(reason): reason
+                case .failed: "The payment could not be sent. Nothing left your wallet."
+                }
             }
+        }
+
+        /// Reads the requests contacts sent Bitkit and publishes them. Logs each request's first state and every change,
+        /// and the arrival of a payee's receipt.
+        private func tendIncoming(_ wallet: PaykitV2.NativeWallet) async {
+            let listed: [PaykitV2.OneTimeRequest]
+            do {
+                listed = try await wallet.requests()
+            } catch {
+                Self.log("requests unreadable: \(Self.describe(error))", level: .warn)
+                return
+            }
+            var changed = false
+            for request in listed {
+                let hash = request.id.requestHash.hex
+                incomingRequests[hash] = request
+                if incoming[hash] == nil {
+                    incoming[hash] = IncomingEntry(firstSeenMs: Self.nowMs())
+                    changed = true
+                }
+                let status = shownStatus(request, hash: hash)
+                if incomingStatus[hash] != status {
+                    incomingStatus[hash] = status
+                    Self.log(
+                        "request from=\(PubkyZ32.encode(request.id.payee)) ref=\(request.paymentReference) "
+                            + "amount=\(request.amount.value) \(request.amount.asset) status=\(request.status) "
+                            + "shown=\(status.rawValue) requestHash=\(hash) manualOnly=\(request.manualOnly)"
+                    )
+                }
+                if let receipt = request.receipt, incoming[hash]?.receiptMsgId != receipt.messageId {
+                    incoming[hash]?.receiptMsgId = receipt.messageId
+                    if incoming[hash]?.attemptId == nil {
+                        incoming[hash]?.attemptId = receipt.attemptId
+                    }
+                    if incoming[hash]?.txid == nil {
+                        incoming[hash]?.txid = method?.sentTxid(forAttempt: receipt.attemptId)
+                    }
+                    changed = true
+                    Self.log(
+                        "receipt received ref=\(request.paymentReference) txid=\(incoming[hash]?.txid ?? "unknown") "
+                            + "receipt=\(receipt.messageId) attempt=\(receipt.attemptId)"
+                    )
+                }
+            }
+            if changed {
+                saveIncoming()
+            }
+            publishIncoming()
+        }
+
+        private func shownStatus(_ request: PaykitV2.OneTimeRequest, hash: String) -> PaykitV2IncomingRequest.Status {
+            if payingNow.contains(hash), request.status == .open {
+                return .paying
+            }
+            switch request.status {
+            case .open: return .open
+            case .beingPaidHere, .mayBePaid: return .paying
+            case .paid: return request.receipt == nil ? .paid : .receipted
+            case .rejected: return .rejected
+            case .cancelled: return .cancelled
+            case .expired: return .expired
+            case .beingHandledByOtherWallet, .held, .unrecorded, .blocked, .divergent, .other: return .other
+            }
+        }
+
+        /// Pays a request a contact sent: Paykit picks the endpoint, the on-chain method sends from Bitkit's wallet, and
+        /// the proof goes to the payee. A refusal that needs the user's confirmation is confirmed once (demo shortcut:
+        /// the tap on Pay stands for every confirmation).
+        func payRequest(hash: String) async throws -> PaykitV2IncomingRequest {
+            guard let wallet else { throw PayError.notReady }
+            guard !payingNow.contains(hash) else { throw PayError.notPayable }
+            await tendIncoming(wallet)
+            guard let request = incomingRequests[hash] else { throw PayError.unknownRequest }
+            guard request.status == .open else { throw PayError.notPayable }
+
+            payingNow.insert(hash)
+            publishIncoming()
+            defer {
+                payingNow.remove(hash)
+            }
+            let reference = request.paymentReference
+            Self.log("paying ref=\(reference) to=\(PubkyZ32.encode(request.id.payee)) amount=\(request.amount.value) requestHash=\(hash)")
+
+            var options = PaykitV2.PaymentOptions(
+                endpoint: nil,
+                listApp: nil,
+                publicEndpointsConfirmed: false,
+                unconfirmedIdentityConfirmed: false,
+                confirmedRefusals: []
+            )
+            var result = try await wallet.payRequest(id: request.id, options: options)
+            if case let .error(.NeedsUser(failure)) = result.decision, let refusal = failure.refusal() {
+                Self.log("pay ref=\(reference) needs a confirmation: \(refusal.reason()); confirming it once")
+                options.confirmedRefusals = [refusal]
+                result = try await wallet.payRequest(id: request.id, options: options)
+            }
+            for failure in result.publicFailures {
+                Self.log("pay ref=\(reference) public endpoint failure: \(failure)", level: .warn)
+            }
+
+            switch result.decision {
+            case let .outcome(outcome):
+                switch outcome {
+                case let .paid(attemptId, proofMessageId):
+                    let txid = method?.sentTxid(forAttempt: attemptId)
+                    incoming[hash]?.attemptId = attemptId
+                    incoming[hash]?.txid = txid
+                    saveIncoming()
+                    do {
+                        try await wallet.flush()
+                    } catch {
+                        Self.log("outbox flush after the proof failed: \(Self.describe(error))", level: .warn)
+                    }
+                    Self.log(
+                        "paid ref=\(reference) txid=\(txid ?? "unknown") attempt=\(attemptId) proof=\(proofMessageId ?? "queued")"
+                    )
+                case let .failed(attemptId, reason):
+                    Self.log("pay ref=\(reference) failed attempt=\(attemptId): \(reason)", level: .warn)
+                    await tendIncoming(wallet)
+                    throw PayError.failed
+                default:
+                    // Pending, uncertain or held: the money may have moved. The request stays "paying" until Paykit
+                    // settles it; it is never paid a second time from here.
+                    Self.log("pay ref=\(reference) outcome=\(Self.describe(outcome))", level: .warn)
+                }
+            case let .error(error):
+                Self.log("pay ref=\(reference) refused: \(Self.describe(error))", level: .warn)
+                await tendIncoming(wallet)
+                throw PayError.refused(Self.payRefusalText(error))
+            }
+
+            payingNow.remove(hash)
+            await tendIncoming(wallet)
+            guard let row = incomingRow(hash) else { throw PayError.unknownRequest }
+            return row
+        }
+
+        /// Declines a request a contact sent (Paykit cancels it and tells the payee).
+        func declineRequest(hash: String) async throws {
+            guard let wallet else { throw PayError.notReady }
+            guard let request = incomingRequests[hash] else { throw PayError.unknownRequest }
+            let msgId = try await wallet.cancelRequest(id: request.id, reason: nil)
+            do {
+                try await wallet.flush()
+            } catch {
+                Self.log("outbox flush after the decline failed: \(Self.describe(error))", level: .warn)
+            }
+            Self.log("declined ref=\(request.paymentReference) msg=\(msgId)")
+            await tendIncoming(wallet)
+        }
+
+        private static func payRefusalText(_ error: PaykitV2.WalletError) -> String {
+            switch error {
+            case .RetryLater, .RuntimeUnavailable:
+                "Payments with this contact are busy. Try again in a moment."
+            case .OutcomeUnknown:
+                "The payment may have been sent. Check your activity before paying again."
+            default:
+                "This payment request cannot be paid right now."
+            }
+        }
+
+        private func incomingRow(_ hash: String) -> PaykitV2IncomingRequest? {
+            guard let request = incomingRequests[hash], let entry = incoming[hash],
+                  request.amount.asset == "btc", let sats = PaykitV2Sats.fromBtc(request.amount.value)
+            else { return nil }
+            return PaykitV2IncomingRequest(
+                id: hash,
+                reference: request.paymentReference,
+                payee: PubkyZ32.encode(request.id.payee),
+                sats: sats,
+                receivedAt: Date(timeIntervalSince1970: TimeInterval(entry.firstSeenMs) / 1000),
+                expiresAt: request.proposalExpiresAtMs.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) },
+                status: shownStatus(request, hash: hash),
+                txid: entry.txid
+            )
+        }
+
+        private func publishIncoming() {
+            let rows = incomingRequests.keys.compactMap(incomingRow).sorted { $0.receivedAt > $1.receivedAt }
+            Task { @MainActor in
+                PaykitV2DemoState.shared.apply(incomingRequests: rows)
+            }
+        }
+
+        private static func readIncoming(_ url: URL?) -> [String: IncomingEntry] {
+            guard let url, FileManager.default.fileExists(atPath: url.path) else { return [:] }
+            do {
+                return try JSONDecoder().decode([String: IncomingEntry].self, from: Data(contentsOf: url))
+            } catch {
+                log("incoming.json unreadable, starting empty: \(error)", level: .warn)
+                return [:]
+            }
+        }
+
+        private func saveIncoming() {
+            guard let incomingURL else { return }
+            do {
+                try JSONEncoder().encode(incoming).write(to: incomingURL, options: [.atomic, .completeFileProtection])
+            } catch {
+                Self.log("incoming.json not written: \(error)", level: .warn)
+            }
+        }
+
+        private static func nowMs() -> UInt64 {
+            UInt64(Date().timeIntervalSince1970 * 1000)
         }
 
         // MARK: - Helpers
@@ -790,6 +1027,11 @@
                 let mirror = Mirror(reflecting: data)
                 return mirror.children.first?.label ?? String(describing: data)
             }
+        }
+
+        private static func describe(_ outcome: PaykitV2.PaymentOutcome) -> String {
+            let mirror = Mirror(reflecting: outcome)
+            return mirror.children.first?.label ?? String(describing: outcome)
         }
 
         private static func describe(_ delivery: PaykitV2.MessageDelivery) -> String {

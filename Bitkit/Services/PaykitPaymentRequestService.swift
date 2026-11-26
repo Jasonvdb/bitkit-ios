@@ -1485,7 +1485,7 @@ final class PaykitPaymentRequestManager {
     private var presentedSubscriptionProposalIds: Set<PaykitSubscription.ID> = []
     private var dismissedSubscriptionPaymentIds: Set<PaykitPaymentRequest.ID> = []
     private var persistedSubscriptionState = PaykitSubscriptionState()
-    /// Demo (Paykit v0.2): mirrors the v0.2 requests Bitkit sent into `historyRequests`.
+    /// Demo (Paykit v0.2): mirrors the v0.2 requests into `pendingRequests` and `historyRequests`.
     @ObservationIgnored private var paykitV2Mirror: AnyCancellable?
 
     var outgoingRequests: [PaykitPaymentRequest] {
@@ -1930,7 +1930,10 @@ final class PaykitPaymentRequestManager {
         #if DEBUG
             if PaykitV2Demo.isEnabled {
                 // Demo: Paykit v0.2 owns the request rows; the v0.1 SDK is not asked.
-                applyPaykitV2Requests(PaykitV2DemoState.shared.outgoingRequests)
+                applyPaykitV2Requests(
+                    outgoing: PaykitV2DemoState.shared.outgoingRequests,
+                    incoming: PaykitV2DemoState.shared.incomingRequests
+                )
                 return true
             }
         #endif
@@ -2126,6 +2129,12 @@ final class PaykitPaymentRequestManager {
     }
 
     func dismiss(_ request: PaykitPaymentRequest) async throws {
+        #if DEBUG
+            if PaykitV2Demo.isEnabled {
+                try await declinePaykitV2(request)
+                return
+            }
+        #endif
         guard canDismiss(request) else { throw PaykitPaymentRequestError.operationInProgress }
         guard let identity = activeIdentity else { throw PaykitPaymentRequestError.requestUnavailable }
         let generation = stateGeneration
@@ -2293,6 +2302,11 @@ final class PaykitPaymentRequestManager {
 
     @discardableResult
     func requestPresentation(_ request: PaykitPaymentRequest) -> Bool {
+        #if DEBUG
+            if PaykitV2Demo.isEnabled {
+                return payPaykitV2(request)
+            }
+        #endif
         discardExpiredRequests(openedRequestId: request.id)
         guard pendingRequests.contains(where: { $0.id == request.id }),
               !processingRequestIds.contains(request.id),
@@ -3105,22 +3119,97 @@ final class PaykitPaymentRequestManager {
         }
 
         fileprivate func mirrorPaykitV2Requests() {
-            paykitV2Mirror = PaykitV2DemoState.shared.$outgoingRequests
+            let state = PaykitV2DemoState.shared
+            paykitV2Mirror = state.$outgoingRequests
+                .combineLatest(state.$incomingRequests)
                 .receive(on: DispatchQueue.main)
-                .sink { [weak self] rows in
-                    self?.applyPaykitV2Requests(rows)
+                .sink { [weak self] outgoing, incoming in
+                    self?.applyPaykitV2Requests(outgoing: outgoing, incoming: incoming)
                 }
         }
 
-        /// In demo mode every outgoing row is a Paykit v0.2 request: v0.1 refreshes are switched off.
-        fileprivate func applyPaykitV2Requests(_ rows: [PaykitV2OutgoingRequest]) {
-            let mapped = rows.map(PaykitPaymentRequest.init(paykitV2Outgoing:))
-            var updated = historyRequests.filter { $0.direction != .outgoing }
-            updated.append(contentsOf: mapped)
-            updated.sort { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
-            if updated != historyRequests {
-                historyRequests = updated
+        /// In demo mode every request row is a Paykit v0.2 request: v0.1 refreshes are switched off. Open requests from
+        /// contacts are pending (the bell, Pay and Dismiss); everything else is history. The request being paid from a
+        /// tap stays pending until its payment is sent, so its card stays on screen with Pay loading.
+        fileprivate func applyPaykitV2Requests(outgoing: [PaykitV2OutgoingRequest], incoming: [PaykitV2IncomingRequest]) {
+            let paying = requestedPresentationId
+            var pending: [PaykitPaymentRequest] = []
+            var history = outgoing.map(PaykitPaymentRequest.init(paykitV2Outgoing:))
+            for row in incoming {
+                let request = PaykitPaymentRequest(paykitV2Incoming: row)
+                if row.status == .open || (row.status == .paying && request.id == paying) {
+                    pending.append(request)
+                } else {
+                    history.append(request)
+                }
             }
+            history.sort { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
+            if pending != pendingRequests {
+                pendingRequests = pending
+            }
+            if history != historyRequests {
+                historyRequests = history
+            }
+        }
+
+        private func paykitV2IncomingRow(for request: PaykitPaymentRequest) -> PaykitV2IncomingRequest? {
+            PaykitV2DemoState.shared.incomingRequests.first {
+                PaykitPaymentRequest(paykitV2Incoming: $0).id == request.id
+            }
+        }
+
+        /// The Pay button of a contact's request: pays it through Paykit v0.2 at once. Demo shortcut: the tap is the
+        /// approval, and Bitkit's send review sheet is skipped. `requestedPresentationId` keeps the Pay button loading
+        /// until the payment is sent; a toast then confirms it.
+        fileprivate func payPaykitV2(_ request: PaykitPaymentRequest) -> Bool {
+            guard requestedPresentationId == nil,
+                  let row = paykitV2IncomingRow(for: request), row.status == .open
+            else { return false }
+            requestedPresentationId = request.id
+            Task { @MainActor [weak self] in
+                do {
+                    let paid = try await PaykitV2DemoState.payRequest(id: row.id)
+                    let name = PaykitV2DemoState.shared.contactName(for: request.counterparty)
+                        ?? PubkyPublicKeyFormat.displayTruncated(request.counterparty)
+                    if paid.status == .paying {
+                        ToastWindowManager.shared.showToast(Toast(
+                            type: .info,
+                            title: t("wallet__payment_request_status_pending"),
+                            description: t("wallet__onchain_broadcast_unconfirmed_note"),
+                            accessibilityIdentifier: "PaykitV2PayingToast"
+                        ))
+                    } else {
+                        Haptics.notify(.success)
+                        ToastWindowManager.shared.showToast(Toast(
+                            type: .success,
+                            title: t("wallet__toast_payment_success_title"),
+                            description: t("contacts__activity_sent_to", variables: ["name": name]),
+                            accessibilityIdentifier: "PaykitV2PaidToast"
+                        ))
+                    }
+                } catch {
+                    Haptics.notify(.error)
+                    ToastWindowManager.shared.showToast(Toast(
+                        type: .error,
+                        title: t("wallet__toast_payment_failed_title"),
+                        description: error.localizedDescription,
+                        accessibilityIdentifier: "PaykitV2PayFailedToast"
+                    ))
+                }
+                guard let self, requestedPresentationId == request.id else { return }
+                requestedPresentationId = nil
+                let state = PaykitV2DemoState.shared
+                applyPaykitV2Requests(outgoing: state.outgoingRequests, incoming: state.incomingRequests)
+            }
+            return true
+        }
+
+        /// The Dismiss button of a contact's request: declines it through Paykit v0.2.
+        fileprivate func declinePaykitV2(_ request: PaykitPaymentRequest) async throws {
+            guard requestedPresentationId != request.id, let row = paykitV2IncomingRow(for: request) else {
+                throw PaykitPaymentRequestError.requestUnavailable
+            }
+            try await PaykitV2DemoState.declineRequest(id: row.id)
         }
     }
 #endif

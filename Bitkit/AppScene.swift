@@ -768,6 +768,7 @@ struct AppScene: View {
                 #if DEBUG
                     // Demo: the Paykit v0.2 host admits every saved contact.
                     PaykitV2DemoState.savedContactsChanged(publicKeys)
+                    PaykitV2DemoState.shared.setContactNames(contacts.map { ($0.publicKey, $0.displayName) })
                 #endif
                 guard PaykitFeatureFlags.isUIEnabled,
                       wallet.walletExists == true,
