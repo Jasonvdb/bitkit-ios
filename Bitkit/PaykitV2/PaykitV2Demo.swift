@@ -14,6 +14,12 @@ enum PaykitV2Demo {
         #endif
     }
 
+    /// The localization key of the label over the contact a payment request asks to pay. "Recipient" reads as the one
+    /// who gets the money, so the demo says "Requested from"; other builds keep "Recipient".
+    static var requestPayerLabelKey: String {
+        isEnabled ? "wallet__payment_request_requested_from" : "wallet__payment_request_recipient"
+    }
+
     #if DEBUG
         /// Demo test hook: `PAYKIT_V2_DEMO_SLOW_V01_MS` makes every Paykit v0.1 SDK operation (the ones that can reach the
         /// Pubky staging Homeserver) wait this long first, to check that no demo screen waits on staging. Unset or 0 adds
